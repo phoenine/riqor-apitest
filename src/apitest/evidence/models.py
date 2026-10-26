@@ -65,7 +65,9 @@ class BasisRecord(_Model):
 
         只看 ``kind`` 是不够的 —— 声称了来源不等于来源支持这个期望。
         """
-        return self.kind in {"req", "schema", "ref"} and self.confirmed
+        return (self.kind in {"req", "schema", "ref"}
+                and self.confirmed
+                and self.locatable is not False)
 
     @property
     def declared_only(self) -> bool:
@@ -94,7 +96,11 @@ class AssertionRecord(_Model):
 
     @property
     def verified(self) -> bool:
-        return self.basis.verified
+        """是否算「验证完成」。
+
+        仅有依据不够 —— 未到达、跳过、异常、失败的断言都没有完成验证。
+        """
+        return self.basis.verified and self.result == "passed"
 
 
 class PreconditionRecord(_Model):
@@ -105,7 +111,8 @@ class PreconditionRecord(_Model):
     """
 
     name: str
-    holds: bool
+    #: True=成立；False=不成立；None=**检查本身失败**（规则抛异常）
+    holds: bool | None = True
     source: dict[str, Any] = Field(default_factory=dict)
     evidence_ref: str | None = None
     message: str = ""
@@ -130,12 +137,24 @@ class ExecutionRecord(_Model):
     def derive_verdict(self) -> Verdict | None:
         """由执行状态 + 断言事实推导验证结论；不改 execution_status。
 
-        - 根本没执行（skipped / not_run / infrastructure_error）→ 无结论
-        - 前提不成立 → inconclusive（不是 pass，也不是 fail）
-        - blocked 但没有前提问题（例如依赖未就绪）→ 无结论
-        - 存在存活断言或未验证依据 → invalid（通过不可信）
-        - 执行失败 → fail
-        - 其余 → pass
+        归约顺序是有讲究的，改动前先读下表：
+
+        ```text
+        1. 根本没执行（skipped/not_run/infrastructure_error）      → 无结论
+        2. 执行失败（status=failed）                             → fail
+           ★ 已知业务失败不能被任何前提覆盖
+        3. blocked                                              → 无结论
+        4. 前提检查失败（holds=None）                             → invalid
+        5. 前提不成立（holds=False）                              → inconclusive
+        6. 存在存活断言                                          → invalid
+        7. 没有断言（原生 assert 未记录）                          → invalid
+        8. 存在未完成断言（error/not_reached/skipped/failed）      → invalid
+        9. 存在未验证依据                                          → invalid
+        10. 其余                                                 → pass
+        ```
+
+        第 3、4 步的顺序尤其重要：一条用例既失败了、前提又不成立时，
+        事实是「失败」，不是「无法验证」——后者会把缺陷洗掉。
         """
         if self.execution_status in {
             ExecutionStatus.SKIPPED,
@@ -144,15 +163,16 @@ class ExecutionRecord(_Model):
         }:
             return None
 
-        if any(not p.holds for p in self.preconditions):
-            return Verdict.INCONCLUSIVE
-
-        if self.execution_status is ExecutionStatus.BLOCKED:
-            # 被阻塞说明没得出有意义的结论，不能记 pass
-            return None
-
         if self.execution_status == ExecutionStatus.FAILED:
             return Verdict.FAIL
+
+        if self.execution_status is ExecutionStatus.BLOCKED:
+            return None
+
+        if any(p.holds is None for p in self.preconditions):
+            return Verdict.INVALID
+        if any(p.holds is False for p in self.preconditions):
+            return Verdict.INCONCLUSIVE
 
         if any(a.check is Check.SURVIVED for a in self.assertions):
             return Verdict.INVALID
@@ -160,7 +180,7 @@ class ExecutionRecord(_Model):
         # 不能因为 pytest 报 passed 就给它一个「有依据的验证通过」。
         if not self.assertions:
             return Verdict.INVALID
-        if any(a.result == "error" for a in self.assertions):
+        if any(a.result != "passed" for a in self.assertions):
             return Verdict.INVALID
         if any(not a.verified for a in self.assertions):
             return Verdict.INVALID

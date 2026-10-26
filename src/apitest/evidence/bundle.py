@@ -118,30 +118,54 @@ def build_junit(document: EvidenceDocument) -> str:
 
 # ---------------------------------------------------------------- inventory
 def build_inventory(document: EvidenceDocument) -> dict[str, Any]:
-    cases = []
+    """本次选中的实例，**按 AUTO 唯一**。
+
+    消费方（riqor ``normalize_junit.py``）的约束：
+
+    - ``cases[].id`` 必须是唯一的 AUTO 编号，重复即报
+      ``duplicate case definition``
+    - 追溯信息在 ``source.test_cases`` / ``source.test_points``，不在顶层
+
+    参数化的多个实例因此折叠到同一条 case 定义下，用 ``instances`` 记录，
+    而 JUnit 里仍是多条 testcase（消费方用 ``AUTO-\\d+`` 正则归组）。
+    """
+    grouped: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+
     for record in document.executions:
-        auto_id, instance = _instance_key(record)
-        item: dict[str, Any] = {
-            "id": auto_id,
-            "nodeid": record.nodeid,
+        auto_id = record.auto_id
+        if auto_id not in grouped:
+            grouped[auto_id] = {
+                "id": auto_id,
+                "title": record.intent or auto_id,
+                "source": {"test_cases": [], "test_points": []},
+                "nodeid": record.nodeid,
+                "instances": [],
+            }
+            order.append(auto_id)
+
+        item = grouped[auto_id]
+        # 不同参数实例可能声明不同来源，取并集并保持稳定顺序
+        if record.tc and record.tc not in item["source"]["test_cases"]:
+            item["source"]["test_cases"].append(record.tc)
+        if record.tp and record.tp not in item["source"]["test_points"]:
+            item["source"]["test_points"].append(record.tp)
+
+        instance_id = ""
+        if record.param_instance:
+            instance_id = str(record.param_instance.get("id", ""))
+        item["instances"].append({
+            "instance": instance_id,
             "execution_status": record.execution_status.value,
-        }
-        if instance:
-            item["instance"] = instance
-        if record.tc:
-            item["tc"] = record.tc
-        if record.tp:
-            item["tp"] = record.tp
-        if record.intent:
-            item["intent"] = record.intent
-        cases.append(item)
+            "verdict": record.verdict.value if record.verdict else None,
+        })
 
     return {
         "schema_version": SCHEMA_VERSION,
         "execution_id": document.meta.execution_id,
         "project_id": document.meta.project_id,
         "environment": document.meta.environment,
-        "cases": cases,
+        "cases": [grouped[auto_id] for auto_id in order],
     }
 
 
@@ -153,12 +177,21 @@ def check_consistency(document: EvidenceDocument, junit_ids: set[str],
     ``not_run`` 的实例在 inventory 里**保留**（它确实被选中了，只是没跑），
     但 JUnit 不写 testcase。所以比较时三方都排除 ``not_run``。
     """
-    expected = {_testcase_name(r) for r in document.executions
-                if r.execution_status is not ExecutionStatus.NOT_RUN}
-    inventory_ids = {_testcase_name_of(item) for item in inventory_cases
-                     if item.get("execution_status") != "not_run"}
+    # 对齐到 AUTO 层面：参数实例折叠在一条 case 定义下，JUnit 里仍是多条
+    ran = [r for r in document.executions
+           if r.execution_status is not ExecutionStatus.NOT_RUN]
+    expected = {r.auto_id for r in ran}
+    # 只有 not_run 实例的 AUTO 保留在 inventory 里（消费方靠它报 not_run），
+    # 但不参与 JUnit 集合比较
+    inventory_ids = {
+        item["id"] for item in inventory_cases
+        if any(i.get("execution_status") != "not_run" for i in item.get("instances", []))
+    }
 
     problems: list[str] = []
+    all_ids = [item["id"] for item in inventory_cases]
+    if len(set(all_ids)) != len(all_ids):
+        problems.append("case-inventory 里存在重复的 AUTO 定义，消费方会报错")
     if expected != junit_ids:
         problems.append(
             f"junit 实例集合与 execution.json 不一致："
@@ -176,16 +209,27 @@ def check_consistency(document: EvidenceDocument, junit_ids: set[str],
     return {
         "execution_vs_junit": "ok",
         "execution_vs_inventory": "ok",
-        "instances": len(expected),
+        "auto_cases": len(expected),
+        "instances": len(ran),
         "excluded_not_run": sum(1 for r in document.executions
                                 if r.execution_status is ExecutionStatus.NOT_RUN),
     }
 
 
-def _parse_junit_ids(xml_text: str) -> set[str]:
+_AUTO_RE = __import__("re").compile(r"AUTO-\d+")
+
+
+def _parse_junit_cases(xml_text: str) -> tuple[set[str], int]:
+    """返回 (AUTO 集合, testcase 总数)。
+
+    JUnit 的 name 可能是 ``AUTO-001[case-a]``；消费方用 ``AUTO-\\d+``
+    正则归组，所以这里也对齐到 AUTO 层面比较。
+    """
     import re
 
-    return set(re.findall(r'<testcase\b[^>]*\bname="([^"]*)"', xml_text))
+    names = re.findall(r'<testcase\b[^>]*\bname="([^"]*)"', xml_text)
+    ids = {match.group(0) for name in names if (match := _AUTO_RE.search(name))}
+    return ids, len(names)
 
 
 # ---------------------------------------------------------------- 主入口
@@ -211,8 +255,9 @@ def write_bundle(document: EvidenceDocument, evidence_dir: Path,
     for name, content in (extra_files or {}).items():
         (evidence_dir / name).write_text(content, encoding="utf-8")
 
-    consistency = check_consistency(
-        document, _parse_junit_ids(junit_text), inventory["cases"])
+    junit_ids, junit_count = _parse_junit_cases(junit_text)
+    consistency = check_consistency(document, junit_ids, inventory["cases"])
+    consistency["junit_testcase_count"] = junit_count
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -247,11 +292,6 @@ def write_bundle(document: EvidenceDocument, evidence_dir: Path,
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return manifest_path
-
-
-def _testcase_name_of(item: dict[str, Any]) -> str:
-    instance = item.get("instance")
-    return f"{item['id']}[{instance}]" if instance else item["id"]
 
 
 __all__ = [

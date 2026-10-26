@@ -93,15 +93,15 @@ def test_c1_three_files_describe_same_instances(tmp_path):
     bundle = _bundle(tmp_path)
     document = _document()
 
-    json_ids = {r.auto_id + (f"[{r.param_instance['id']}]" if r.param_instance else "")
-                for r in document.executions
+    json_ids = {r.auto_id for r in document.executions
                 if r.execution_status is not ExecutionStatus.NOT_RUN}
-    junit_ids = _junit_ids((bundle / "junit.xml").read_text(encoding="utf-8"))
+    junit_ids = {m.group(0) for name in _junit_ids(
+        (bundle / "junit.xml").read_text(encoding="utf-8"))
+        if (m := re.search(r"AUTO-\d+", name))}
     inventory = yaml.safe_load((bundle / "case-inventory.yaml").read_text(encoding="utf-8"))
-    # inventory 保留 not_run（确实被选中过），但与 junit 对齐时三方都排除它
-    inventory_ids = {item["id"] + (f"[{item['instance']}]" if item.get("instance") else "")
-                     for item in inventory["cases"]
-                     if item["execution_status"] != "not_run"}
+    inventory_ids = {
+        item["id"] for item in inventory["cases"]
+        if any(i["execution_status"] != "not_run" for i in item["instances"])}
 
     assert json_ids == junit_ids, "junit 与 execution.json 实例集合不一致"
     assert json_ids == inventory_ids, "inventory 与 execution.json 实例集合不一致"
@@ -166,12 +166,15 @@ def test_c3_field_mapping_is_reversible(tmp_path):
     for record in document.executions:
         item = by_id[record.auto_id]
         assert item["id"] == record.auto_id
-        assert item.get("tc") == record.tc
-        assert item.get("intent") == record.intent
-        if record.param_instance:
-            assert item["instance"] == record.param_instance["id"]
-        else:
-            assert "instance" not in item
+        # 追溯在 source 里（消贽方契约），不在顶层
+        if record.tc:
+            assert record.tc in item["source"]["test_cases"]
+        if record.intent:
+            assert item["title"] == record.intent
+
+        instance_ids = [i["instance"] for i in item["instances"]]
+        expected = record.param_instance["id"] if record.param_instance else ""
+        assert expected in instance_ids
 
 
 def test_c3_status_values_are_the_shared_vocabulary(tmp_path):
@@ -180,9 +183,12 @@ def test_c3_status_values_are_the_shared_vocabulary(tmp_path):
     document = _document()
     inventory = yaml.safe_load((bundle / "case-inventory.yaml").read_text(encoding="utf-8"))
 
-    json_status = {r.auto_id: r.execution_status.value for r in document.executions}
+    json_status = {(r.auto_id, (r.param_instance or {}).get("id", "")):
+                   r.execution_status.value for r in document.executions}
     for item in inventory["cases"]:
-        assert item["execution_status"] == json_status[item["id"]]
+        for instance in item["instances"]:
+            key = (item["id"], instance["instance"])
+            assert instance["execution_status"] == json_status[key]
 
 
 # ---------------------------------------------------------------- C4

@@ -28,18 +28,33 @@ class Precondition:
         self._rule = rule
 
     def holds(self, data: Any) -> bool:
-        """判定前提是否成立，并把结果写进证据。"""
+        """判定前提是否成立，并把结果写进证据。
+
+        **三种结果必须区分**：
+
+        | 情况 | holds | 报告含义 |
+        |---|---|---|
+        | 规则返回 True | True | 前提成立，可继续验证 |
+        | 规则返回 False | False | 前提不成立 → 无法验证（inconclusive） |
+        | 规则抛异常 | None | **检查失败** → 结论不可信（invalid） |
+
+        把异常也记成 ``False`` 会把「字段名写错导致 KeyError」报告成
+        「数据条件不满足」，等于用实现 bug 掩盖了验证缺失。
+        """
+        ctx = current_context()
         try:
             ok = bool(self._rule(data))
-            message = "" if ok else "前提条件不满足"
-        except Exception as exc:                     # noqa: BLE001 - 判定失败即前提不成立
-            ok = False
-            message = f"前提判定异常: {type(exc).__name__}: {exc}"
+        except Exception as exc:                     # noqa: BLE001 - 判定失败≠前提不成立
+            if ctx is not None:
+                ctx.add_precondition(PreconditionRecord(
+                    name=self.name, holds=None, source=self.source,
+                    message=f"前提检查失败（规则抛异常）: {type(exc).__name__}: {exc}"))
+            return False
 
-        ctx = current_context()
         if ctx is not None:
             ctx.add_precondition(PreconditionRecord(
-                name=self.name, holds=ok, source=self.source, message=message))
+                name=self.name, holds=ok, source=self.source,
+                message="" if ok else "前提条件不满足"))
         return ok
 
     def __repr__(self) -> str:                       # pragma: no cover

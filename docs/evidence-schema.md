@@ -104,14 +104,24 @@ riqor 侧聚合时：`status=passed` 但 `verdict=invalid` 的实例
 ### C1 三件描述同一批实例
 
 ```text
-set(execution.json.executions where status != not_run)
-  == set(junit.xml testcase 解析出的 auto_id)
-  == set(case-inventory.yaml cases[].id where execution_status != not_run)
-有参数实例时按 (auto_id, instance) 二元组比较
+{AUTO} = set(execution.json.executions where status != not_run 的 auto_id)
+       == set(junit.xml 每个 testcase name 用 AUTO-\d+ 提取出的编号)
+       == set(case-inventory.yaml cases[].id
+              where 该 case 的 instances 里存在 status != not_run)
 ```
 
-`case-inventory.yaml` **保留** `not_run` 实例（它确实被选中了，只是没跑），
-但 JUnit 不写 testcase，所以三方对齐时都排除 `not_run`。
+**按 AUTO 层面比较，不是按实例名**。原因：消费方要求 `cases[].id` 唯一，
+参数实例折叠在同一条 case 定义的 `instances` 里；而 JUnit 里每个实例一条
+testcase（`AUTO-001[case-a]`），消费方用 `AUTO-\d+` 正则归组。
+
+因此 C1 还要额外检查两件事：
+
+- `cases[].id` 无重复（否则消费方报 `duplicate case definition`）
+- JUnit testcase 总数 == `execution.json` 里非 `not_run` 的实例数
+
+`case-inventory.yaml` **保留**只有 `not_run` 实例的 AUTO（消费方靠它报
+`not_run`），但不参与集合比较——它在 JUnit 里没有对应 testcase。
+
 实现见 `evidence/bundle.py::check_consistency`。
 
 ### C2 状态一致
@@ -119,10 +129,18 @@ set(execution.json.executions where status != not_run)
 每个实例，`execution.json.execution_status` 经 3.3 映射后，
 必须等于 `junit.xml` 中该 testcase 元素推导出的状态。
 
-### C3 字段映射可逆
+### C3 关键身份与追溯无损
 
-对 3.1 的每个字段，正向转换后能反推出原值（`tc`/`tp` 的单值 ↔ 数组
-需保留原样，不做额外合并）。
+**不要求所有字段可逆** —— 有些转换天然有损（`param_instance.params` 转字符串、
+耗时保留三位、代码版本摘要截断）。要求的是：
+
+| 必须无损 | 可以有损（须保留原始证据引用） |
+|---|---|
+| `auto_id`、`tc`、`tp`、`intent`、`execution_status` | `params` 的完整对象（保留 `execution.json` 路径） |
+| 参数实例的标识（不折叠、不重排） | `duration_s` 精度 |
+| 断言与请求/查询的关联 ID | `code_version` 的短摘要 |
+
+有损字段必须在 manifest 里留下指向原始证据的引用，不能只留转换后的值。
 
 ### C4 校验和有效
 
@@ -138,7 +156,7 @@ riqor 侧合并多次执行时：
 
 | 场景 | 规则 |
 |---|---|
-| 同一实例多次执行 | 取**最近一次**，历史进 `executions[]` 的 history（不覆盖） |
+| 同一实例多次执行 | 取**最近一次**，但仅限同一环境 + 同一代码版本 + 同一数据条件 + 同一验证范围；任一不同则并列保留，不得用一次成功覆盖历史失败 |
 | 同一 TC 多条用例 | 结论取**最弱**：fail > invalid > inconclusive > pass |
 | 计划有、执行无 | 记为 `not_run`，来源是 plan，不是执行结果 |
 | 任一实例 `verdict=invalid` | 该 TC 不得记为已验证 |

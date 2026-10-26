@@ -71,7 +71,7 @@ is_status                     HTTP 状态码
 | 2 | 引用可定位 | 引用能否解析到具体条目 | **框架自动**（格式 + 存在性） |
 | 3 | 依据已确认 | 该来源确实支持这个期望 | **人 / Agent 显式确认**，不可自动推导 |
 | 4 | 执行结果 | `passed` / `failed` / `error` / `skipped` / `not_reached` | 框架 |
-| 5 | 负对照结果 | `killed` / `survived` / `unsupported` / `not_run` | 离线检查 |
+| 5 | 负对照结果 | `killed` / `survived` / `unsupported` / `error` / `not_run` | 离线检查 |
 
 由此派生三个不同强度的结论，报告必须分开统计：
 
@@ -231,7 +231,7 @@ execution.json
 │       ├── result                       passed|failed|error|skipped|not_reached
 │       ├── error_type                   AssertionError|KeyError|TypeError|...
 │       ├── failure_reason               面向用户的失败说明
-│       ├── check {killed|survived|unsupported|not_run}
+│       ├── check {killed|survived|unsupported|error|not_run}
 │       └── refs[] → request_id / query_id / ref_id
 └── attachments/<auto_id>/
     ├── requests/<request_id>.json

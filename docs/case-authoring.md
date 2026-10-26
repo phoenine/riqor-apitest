@@ -15,8 +15,10 @@ def test_user_list(api):
     expect(resp.json()["page"]).equal_to(1, basis=req("REQ-1"))
 ```
 
-三个必填：`id`（形如 `AUTO-001`，分配后不变）、`intent`（一句话说清验什么）、
-每条断言的 `basis`。
+两个必填：`id`（形如 `AUTO-001`，分配后不变）、`intent`（一句话说清验什么）。
+
+`basis` 不强制写，但**不写就记为 `observed`，不计入已验证覆盖** ——
+也就是说，省事的代价是这条断言在报告里只是「看到过」。
 
 `api` 是框架给的客户端，已按环境配好 base_url、认证、默认头。
 取值、筛选、循环一律用标准 Python —— `resp.json()` 就是普通 dict。
@@ -24,15 +26,30 @@ def test_user_list(api):
 ## 二、依据（basis）：期望值从哪来
 
 ```python
-req("REQ-3")                          # 需求条目
-schema("openapi#/users/get/200")      # 接口规范 + 字段位置
-ref("refs.total", inputs={...})       # 参考计算（函数 + 入参）
-measured("2026-10-26")                # 某天实测，只能说明"当时如此"
-# 不写 basis → 自动记为 observed，进报告但不计入已验证覆盖
+req("REQ-3", confirmed=True)                    # 需求条目，已核对确支持该期望
+schema("openapi#/users/get/200", confirmed=True) # 接口规范 + 字段位置
+ref("refs.total", inputs={...}, confirmed=True)  # 参考计算（函数 + 入参）
+measured("2026-10-26")                            # 某天实测，只能说明"当时如此"
+# 完全不写 basis → 记为 observed，进报告但不计入已验证
 ```
 
-前三种算「已验证覆盖」，后两种只表示「看到过」。**报告首页会分开统计这两类**，
-所以不要为了省事全写 `observed`。
+**依据有五个维度，不是「写哪个函数」这么简单**：
+
+| # | 维度 | 谁来判定 |
+|---|---|---|
+| 1 | 来源类别（req/schema/ref/measured/observed） | 你声明 |
+| 2 | 引用可定位（能不能解析到具体条目） | 框架自动查 |
+| 3 | **依据已确认**（该来源确实支持这个期望） | **你显式写 `confirmed=True`** |
+| 4 | 执行结果（passed/failed/error/skipped/not_reached） | 框架 |
+| 5 | 负对照结果（killed/survived/...） | 离线检查 |
+
+只有 **1∈{req,schema,ref} ∧ 2 ∧ 3 ∧ 4=passed** 才算「已验证」。
+
+`confirmed` 默认 `False`。写上 `req("REQ-3")` 只表示「声称来源是 REQ-3」，
+框架没法判断 REQ-3 讲的是不是这个口径 —— 所以**忘写就是未确认**，
+报告里单列，不计入已验证覆盖。这是刻意的。
+
+`measured` / `observed` 永远不计入已验证，它们只能做行为回归基线。
 
 ## 三、比较器
 
@@ -47,11 +64,13 @@ all_in / none_in              集合约束
 is_status                     HTTP 状态码
 ```
 
-**不要用 `greater_than(0)` 代替具体值。** 它只能回答「有没有返回东西」，
-回答不了「返回得对不对」。写不出具体值通常说明还没找到依据 —— 去找，
-而不是把断言放宽。
+**比较器的强弱不决定断言有没有价值。** 如果需求写的是「库存数必须大于 0」，
+那 `greater_than(0)` 配 `confirmed=True` 就是完整有效的业务断言。
 
-容差是唯一合理的放宽方式：
+真正该问的不是「这个比较器够不够强」，而是：**期望从哪里来**。
+写不出具体值通常说明还没找到依据 —— 去找，而不是随手放宽。
+
+数值比较优先用容差而不是边界：
 
 ```python
 expect(seconds).close_to(9.2889, tol=0.002, basis=ref("refs.degradation_seconds", inputs={...}))
@@ -188,8 +207,10 @@ apitest render --evidence outputs/runs/<id>/ --plan plan.yaml
 
 每条断言都会进报告第三层：期望、实际、依据（含参考计算入参）、关联请求。
 
-- 依据是 `req`/`schema`/`ref` → 标记为已证实
-- 依据是 `measured`/`observed` → 黄色标记，不计入已验证覆盖
+- 依据是 `req`/`schema`/`ref` **且 `confirmed=True`** → 已验证
+- 依据是 `req`/`schema`/`ref` 但**没写 confirmed** → 蓝色标记「仅声明来源」，不计入已验证
+- 依据是 `measured`/`observed` → 黄色标记「仅观察」，不计入已验证
+- 断言 `result` 不是 `passed`（未到达/异常）→ 不算验证完成
 - 用例没写断言 → 标 `blocked`，不进通过率
 - 前提不成立 → 标「无法验证」，不进通过率
 
