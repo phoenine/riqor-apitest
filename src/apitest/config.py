@@ -128,6 +128,8 @@ class ReportConfig(BaseModel):
     theme: str = "default"
     title: str = "API 测试报告"
     output_dir: str = "outputs/reports"
+    #: 计划清单路径（相对配置文件）—— 覆盖矩阵的输入；为空则矩阵不可计算
+    plan: str | None = None
 
 
 class ProjectMeta(BaseModel):

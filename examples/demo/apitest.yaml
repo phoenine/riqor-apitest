@@ -25,5 +25,6 @@ datasets:
 
 report:
   theme: default
+  plan: plan.yaml
   title: Demo API 测试报告
   output_dir: outputs/reports

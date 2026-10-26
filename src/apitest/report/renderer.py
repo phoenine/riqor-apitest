@@ -20,6 +20,12 @@ from apitest.evidence.models import (
     ExecutionStatus,
     Verdict,
 )
+from apitest.plan import (
+    STATE_LABELS,
+    Plan,
+    PlannedCase,
+    build_matrix,
+)
 
 THEMES_DIR = Path(__file__).resolve().parent / "themes"
 
@@ -103,6 +109,7 @@ def _execution_view(record: Any) -> dict[str, Any]:
 
 
 def build_context(document: EvidenceDocument, *,
+                  plan: "Plan | None" = None,
                   planned_tcs: list[str] | None = None,
                   title: str = "") -> dict[str, Any]:
     executions = [_execution_view(e) for e in document.executions]
@@ -111,27 +118,19 @@ def build_context(document: EvidenceDocument, *,
     verdict_counts = document.verdict_counts()
     basis = document.basis_coverage()
 
-    # 覆盖缺口按「计划范围」算：只遍历 execution.json 会漏掉没实现的 TC
-    implemented = {e["tc"] for e in executions if e["tc"]}
-    planned = list(planned_tcs or [])
-    missing = [tc for tc in planned if tc not in implemented]
+    # 兼容旧调用：只给 TC 编号时构造一个最简计划（没有必需验证点）
+    if plan is None and planned_tcs:
+        plan = Plan(test_cases=[PlannedCase(id=tc) for tc in planned_tcs])
 
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    unlinked: list[dict[str, Any]] = []
-    for item in executions:
-        if item["tc"]:
-            grouped.setdefault(item["tc"], []).append(item)
-        else:
-            unlinked.append(item)
+    # 覆盖矩阵只能从计划算 —— 只遍历 execution.json 会漏掉「从未实现」的 TC
+    matrix = build_matrix(document, plan)
+    for row in matrix["rows"]:
+        row["execution_views"] = [_execution_view(r) for r in row["executions"]]
+        row["execution_ids"] = [r.auto_id for r in row["executions"]]
+        row["state_label"] = STATE_LABELS.get(row["state"], row["state"])
+        row["verdict_label"] = VERDICT_LABELS.get(row["verdict"], "") if row["verdict"] else "无结论"
 
-    coverage = [
-        {
-            "tc": tc,
-            "executions": items,
-            "worst": _worst_verdict([i["verdict"] for i in items]),
-        }
-        for tc, items in sorted(grouped.items())
-    ]
+    unlinked = [item for item in executions if not item["tc"]]
 
     return {
         "title": title or document.meta.project_id or "API 测试报告",
@@ -155,21 +154,16 @@ def build_context(document: EvidenceDocument, *,
             "has_no_verdict": any(v is None for v in
                                   [e.verdict for e in document.executions]),
         },
-        "coverage": coverage,
+        "matrix": matrix,
         "unlinked": unlinked,
-        "planned": planned,
-        "missing": missing,
         "executions": executions,
-        "labels": {"status": STATUS_LABELS, "verdict": VERDICT_LABELS},
+        "labels": {"status": STATUS_LABELS, "verdict": VERDICT_LABELS,
+                   "state": STATE_LABELS},
     }
 
 
-def _worst_verdict(verdicts: list[str]) -> str:
-    order = {"fail": 0, "invalid": 1, "inconclusive": 2, "pass": 3, "": 4}
-    return sorted(verdicts, key=lambda v: order.get(v, 9))[0] if verdicts else ""
-
-
 def render(document: EvidenceDocument, *, output: Path, theme: str = "default",
+           plan: "Plan | None" = None,
            planned_tcs: list[str] | None = None, title: str = "") -> Path:
     """渲染 HTML 报告，返回输出路径。"""
     theme_path = _theme_dir(theme)
@@ -180,7 +174,7 @@ def render(document: EvidenceDocument, *, output: Path, theme: str = "default",
         lstrip_blocks=True,
     )
     template = env.get_template("report.html.j2")
-    context = build_context(document, planned_tcs=planned_tcs, title=title)
+    context = build_context(document, plan=plan, planned_tcs=planned_tcs, title=title)
 
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)

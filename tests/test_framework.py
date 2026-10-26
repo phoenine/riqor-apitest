@@ -287,7 +287,12 @@ def test_report_context_counts_and_gaps():
     context = build_context(_document(), planned_tcs=["TC-1", "TC-2", "TC-3", "TC-4"])
     assert context["summary"]["total"] == 3
     assert context["summary"]["status_counts"]["skipped"] == 1
-    assert context["missing"] == ["TC-4"], "未实现的 TC 必须出现在缺口里"
+
+    matrix = context["matrix"]
+    assert matrix["computable"] is True
+    states = {row["tc"]: row["state"] for row in matrix["rows"]}
+    assert states["TC-4"] == "not_implemented", "未实现的 TC 必须出现在矩阵里"
+    assert matrix["gaps"] >= 1
 
 
 def test_report_renders_three_layers(tmp_path):
@@ -296,7 +301,8 @@ def test_report_renders_three_layers(tmp_path):
     html = output.read_text(encoding="utf-8")
 
     assert "摘要" in html and "需求覆盖" in html and "证据详情" in html
-    assert "TC-4" in html, "覆盖缺口要出现在报告里"
+    assert "TC-4" in html, "未实现的 TC 要出现在覆盖矩阵里"
+    assert "未实现" in html
     assert "跳过" in html, "执行状态必须在首页可见"
     assert "不计入已验证覆盖" in html or "依据" in html
 

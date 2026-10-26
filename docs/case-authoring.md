@@ -119,14 +119,63 @@ def test_x(api, data):
 | 断言里 `TODO` | `verify` 直接失败 | 写完再提交 |
 | 凭据写进代码 | 会进证据与仓库 | 配置里用 `*_env`，代码里用 `api` |
 
-## 八、跑起来
+## 八、计划清单（覆盖矩阵的输入）
+
+报告里的「需求覆盖」不是从执行结果推的 —— 它从 `plan.yaml` 来。
+执行结果里根本没有「从未实现」的 TC，只能由计划指出。
+
+```yaml
+# plan.yaml
+test_cases:
+  - id: TC-008
+    title: 劣化趋势默认口径
+    required_assertions:        # 用来看「部分验证」
+      - 缺省与显式 p50 等价
+  - id: TC-009
+    title: 样本数与明细核对
+    waived:                     # 豁免：缺口保留，只标注原因
+      reason: CK 只读通路未开通
+      impact: 该口径无自动化覆盖，需手工核对
+```
+
+在 `apitest.yaml` 里指向它：
+
+```yaml
+report:
+  plan: plan.yaml
+```
+
+**`required_assertions` 靠断言 `intent` 文本匹配**。所以写断言时给
+`intent=` 补一句人话：
+
+```python
+expect(payload["page"]).equal_to(1, basis=req("REQ-1", confirmed=True),
+                                 intent="第一页",
+                                 source="response.page")
+```
+
+不写 `intent` 的断言，`required_assertions` 覆盖不到，TC 会显示「部分验证」。
+这不是 bug，是提醒：没写清在验什么，就无法确定验到了。
+
+没有 `plan.yaml` 时，报告显示「覆盖矩阵不可计算」——不会假装完整。
+
+## 九、跑起来
 
 ```bash
 apitest verify --path cases/                    # 不含网络，先过这关
 apitest run --path cases/ --env staging         # 执行并落证据
 apitest check --evidence outputs/runs/<id>/     # 离线检查依据可靠性
-apitest render --evidence outputs/runs/<id>/    # 生成 HTML 报告
+apitest render --evidence outputs/runs/<id>/ --config apitest.yaml
 ```
+
+`render` 会从 `apitest.yaml` 读 `report.plan`。也可以直接指定：
+
+```bash
+apitest render --evidence outputs/runs/<id>/ --plan plan.yaml
+```
+
+注意 `render` **不需要环境凭据** —— 它只读配置的 `report` 段与证据，
+不该因为数据库密码没配就渲染不出报告。
 
 `verify` 与 `check` 能承诺的东西不同：
 

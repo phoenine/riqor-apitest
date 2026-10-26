@@ -1,0 +1,26 @@
+# 计划清单：描述「应该验什么」，与本次执行无关。
+# 覆盖矩阵只从这里算 —— 执行结果里根本没有「从未实现」的 TC。
+test_cases:
+  - id: TC-1
+    title: 用户列表缺省分页
+    required_assertions:
+      - 第一页
+  - id: TC-2
+    title: pageSize 生效
+  - id: TC-3
+    title: 未知用户返回 404
+  - id: TC-4
+    title: Bearer 认证被注入
+  - id: TC-5
+    title: 产量总和与明细核对
+    required_assertions:
+      - 总和
+  - id: TC-6
+    title: 停用用户不计入活跃统计
+  - id: TC-7
+    title: 缺数据角色分支
+    waived:
+      reason: 示例数据集里没有该角色的用户
+      impact: 该分支无自动化覆盖，需真实数据集补充
+  - id: TC-8
+    title: 未实现的导出分支

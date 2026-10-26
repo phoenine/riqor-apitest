@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from apitest.evidence.models import EvidenceDocument
+from apitest.plan import Plan
 from apitest.report.renderer import render as render_report
 
 AUTO_RE = re.compile(r"^AUTO-\d+$")
@@ -250,11 +251,47 @@ def cmd_render(args: argparse.Namespace) -> int:
         return 1
 
     document = EvidenceDocument.model_validate_json(doc_path.read_text(encoding="utf-8"))
+
+    plan = _resolve_plan(args)
+    if plan is None and not args.planned_tcs:
+        print("提示：未提供计划清单，报告里的覆盖矩阵将显示「不可计算」。"
+              "用 --plan 或 apitest.yaml 的 report.plan 指定。", file=sys.stderr)
+
     output = Path(args.output) if args.output else evidence / "report.html"
-    render_report(document, output=output, theme=args.theme,
+    render_report(document, output=output, theme=args.theme, plan=plan,
                   planned_tcs=args.planned_tcs or None, title=args.title or "")
     print(f"已生成 {output}")
+    if plan is not None:
+        print(f"覆盖矩阵：{len(plan.test_cases)} 个测试用例")
     return 0
+
+
+def _resolve_plan(args: argparse.Namespace) -> "Plan | None":
+    """计划来源优先级：--plan > 配置文件里的 report.plan。
+
+    只读配置的 ``report`` 段，**不做完整校验** —— 渲染报告不需要数据库凭据，
+    要求它们存在会让「没配环境就连报告都看不了」。
+    """
+    import yaml
+
+    from apitest.plan import PlanError, load_plan
+
+    try:
+        if args.plan:
+            return load_plan(args.plan)
+        if args.config:
+            config_path = Path(args.config)
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            plan_name = (raw.get("report") or {}).get("plan")
+            if plan_name:
+                return load_plan(config_path.parent / plan_name)
+    except PlanError as exc:
+        print(f"计划清单有问题：{exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    except yaml.YAMLError as exc:
+        print(f"配置文件不是合法 YAML：{exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    return None
 
 
 # ---------------------------------------------------------------- 入口
@@ -297,7 +334,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_render.add_argument("--output", default=None)
     p_render.add_argument("--theme", default="default")
     p_render.add_argument("--title", default=None)
-    p_render.add_argument("--planned-tcs", nargs="*", default=[])
+    p_render.add_argument("--plan", default=None, help="计划清单路径（覆盖矩阵输入）")
+    p_render.add_argument("--config", default=None, help="配置文件路径（从中读 report.plan）")
+    p_render.add_argument("--planned-tcs", nargs="*", default=[],
+                          help="只给 TC 编号的简化形式，不推荐")
     p_render.set_defaults(func=cmd_render)
 
     return parser

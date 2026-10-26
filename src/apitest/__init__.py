@@ -22,6 +22,15 @@ from apitest.config import ConfigError, EnvironmentConfig, ProjectConfig, load_c
 from apitest.context import CaseContext, case_context, current_context, load_executions
 from apitest.dataset import Dataset, build_dataset
 from apitest.expect import COMPARATORS, expect
+from apitest.plan import (
+    CoverageState,
+    Plan,
+    PlanError,
+    PlannedCase,
+    Waiver,
+    build_matrix,
+    load_plan,
+)
 from apitest.precondition import Precondition, precondition
 from apitest.reference import Computed, ReferenceError, compute, resolve
 
@@ -38,6 +47,9 @@ __all__ = [
     "compute", "Computed", "ReferenceError", "resolve",
     # 数据前提
     "precondition", "Precondition",
+    # 计划与覆盖矩阵
+    "Plan", "PlannedCase", "Waiver", "PlanError", "CoverageState",
+    "load_plan", "build_matrix",
     # 客户端与数据源
     "APIClient", "RecordedResponse", "Dataset", "build_dataset",
     # 配置

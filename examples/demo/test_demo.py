@@ -14,7 +14,9 @@ def test_user_list_default_page(api):
 
     expect(resp.status_code).is_status(200, basis=schema("demo#/users/get/200", confirmed=True))
     payload = resp.json()
-    expect(payload["page"]).equal_to(1, basis=req("REQ-1", confirmed=True))
+    expect(payload["page"]).equal_to(1, basis=req("REQ-1", confirmed=True),
+                                   intent="第一页",
+                                   source="response.page")
     expect(payload["total"]).equal_to(3, basis=schema("demo#/users/total", confirmed=True))
 
 
@@ -53,7 +55,9 @@ def test_production_total_matches_reference(api, data):
 
     payload = api.get("/production/total").json()
 
-    expect(payload["total"]).equal_to(expected.value, basis=expected.basis)
+    expect(payload["total"]).equal_to(expected.value, basis=expected.basis,
+                                   intent="总和",
+                                   source="response.total")
     expect(payload["months"]).equal_to(len(months), basis=req("REQ-5", confirmed=True))
 
 

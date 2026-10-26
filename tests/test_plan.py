@@ -1,0 +1,206 @@
+"""覆盖矩阵：七种状态、豁免语义、计划不可计算。
+
+覆盖状态回答「验到什么程度」，验证结论回答「结果是什么」——
+两者分开，否则「失败了」和「没验」在报告里长得一样。
+"""
+from __future__ import annotations
+
+import pytest
+
+from apitest.evidence.models import (
+    AssertionRecord,
+    BasisRecord,
+    EvidenceDocument,
+    ExecutionRecord,
+    ExecutionStatus,
+    Meta,
+    Verdict,
+)
+from apitest.plan import (
+    Plan,
+    PlanError,
+    PlannedCase,
+    Waiver,
+    build_matrix,
+    evaluate_case,
+    load_plan,
+)
+
+
+def _assertion(intent: str = "验一个字段", confirmed: bool = True,
+               passed: bool = True) -> AssertionRecord:
+    return AssertionRecord(
+        id="AS-0001", kind="equal_to", intent=intent,
+        expected=1, actual=1,
+        basis=BasisRecord(kind="req", ref="REQ-1", confirmed=confirmed),
+        passed=passed)
+
+
+def _exec(tc: str, status: ExecutionStatus = ExecutionStatus.PASSED,
+          assertions: list[AssertionRecord] | None = None,
+          auto_id: str = "AUTO-001") -> ExecutionRecord:
+    record = ExecutionRecord(
+        auto_id=auto_id, tc=tc, execution_status=status,
+        assertions=assertions if assertions is not None else [_assertion()])
+    record.verdict = record.derive_verdict()
+    return record
+
+
+def _doc(records: list[ExecutionRecord]) -> EvidenceDocument:
+    return EvidenceDocument(
+        meta=Meta(execution_id="run-plan", project_id="demo", environment="local"),
+        executions=records)
+
+
+def _plan(*cases: PlannedCase) -> Plan:
+    return Plan(test_cases=list(cases))
+
+
+# ---------------------------------------------------------------- 七态
+def test_not_implemented_when_no_execution_declares_tc():
+    matrix = build_matrix(_doc([]), _plan(PlannedCase(id="TC-9")))
+    row = matrix["rows"][0]
+    assert row["state"] == "not_implemented"
+    assert row["verdict"] is None
+    assert matrix["gaps"] == 1
+
+
+def test_not_run_when_all_executions_skipped():
+    document = _doc([
+        _exec("TC-1", ExecutionStatus.SKIPPED, []),
+        _exec("TC-1", ExecutionStatus.NOT_RUN, [], auto_id="AUTO-002"),
+    ])
+    row = build_matrix(document, _plan(PlannedCase(id="TC-1")))["rows"][0]
+    assert row["state"] == "not_run"
+    assert row["verdict"] is None, "没执行就不能编造结论"
+
+
+def test_inconclusive_when_precondition_fails():
+    from apitest.evidence.models import PreconditionRecord
+
+    record = _exec("TC-1")
+    record.preconditions = [PreconditionRecord(name="p", holds=False)]
+    record.verdict = record.derive_verdict()
+
+    row = build_matrix(_doc([record]), _plan(PlannedCase(id="TC-1")))["rows"][0]
+    assert row["state"] == "inconclusive"
+    assert row["verdict"] == "inconclusive"
+
+
+def test_partial_when_required_assertion_uncovered():
+    document = _doc([_exec("TC-1", assertions=[_assertion(intent="第一页")])])
+    case = PlannedCase(id="TC-1", required_assertions=["第一页", "总条数"])
+
+    row = build_matrix(document, _plan(case))["rows"][0]
+    assert row["state"] == "partial"
+    assert row["uncovered"] == ["总条数"]
+
+
+def test_partial_resolves_when_intent_covers_requirement():
+    document = _doc([_exec("TC-1", assertions=[
+        _assertion(intent="第一页"), _assertion(intent="总条数等于 3")])])
+    case = PlannedCase(id="TC-1", required_assertions=["第一页", "总条数"])
+
+    row = build_matrix(document, _plan(case))["rows"][0]
+    assert row["state"] == "verified"
+
+
+def test_unconfirmed_when_basis_not_confirmed():
+    document = _doc([_exec("TC-1", assertions=[_assertion(confirmed=False)])])
+    row = build_matrix(document, _plan(PlannedCase(id="TC-1")))["rows"][0]
+
+    assert row["state"] == "unconfirmed"
+    assert "依据未确认" in row["note"]
+
+
+def test_verified_requires_confirmed_basis_and_no_gap():
+    document = _doc([_exec("TC-1", assertions=[_assertion(confirmed=True)])])
+    row = build_matrix(document, _plan(PlannedCase(id="TC-1")))["rows"][0]
+    assert row["state"] == "verified"
+    assert row["verdict"] == "pass"
+
+
+def test_verified_coverage_can_still_fail():
+    """覆盖完整 ≠ 通过。失败是验证结论，不是覆盖状态。"""
+    document = _doc([_exec("TC-1", ExecutionStatus.FAILED,
+                           assertions=[_assertion(passed=False)])])
+    row = build_matrix(document, _plan(PlannedCase(id="TC-1")))["rows"][0]
+
+    assert row["state"] == "verified", "覆盖是完整的"
+    assert row["verdict"] == "fail", "但结果是失败"
+
+
+# ---------------------------------------------------------------- 豁免
+def test_waiver_keeps_the_gap_visible():
+    """豁免只降级展示，不让缺口从报告里消失。"""
+    document = _doc([])
+    case = PlannedCase(id="TC-9", waived=Waiver(reason="环境未开通", impact="无自动化覆盖"))
+
+    matrix = build_matrix(document, _plan(case))
+    row = matrix["rows"][0]
+
+    assert row["state"] == "not_implemented", "状态不变"
+    assert row["waived"]["reason"] == "环境未开通"
+    assert matrix["gaps"] == 0, "显式豁免不计入未处理缺口"
+    assert matrix["waived"] == 1, "但必须单独计数"
+
+
+def test_multiple_executions_use_worst_state_and_verdict():
+    document = _doc([
+        _exec("TC-1", assertions=[_assertion()], auto_id="AUTO-001"),
+        _exec("TC-1", ExecutionStatus.FAILED,
+              assertions=[_assertion(passed=False)], auto_id="AUTO-002"),
+    ])
+    row = build_matrix(document, _plan(PlannedCase(id="TC-1")))["rows"][0]
+    assert row["verdict"] == "fail", "同一 TC 取最弱结论"
+
+
+# ---------------------------------------------------------------- 不可计算
+def test_no_plan_means_not_computable():
+    matrix = build_matrix(_doc([_exec("TC-1")]), None)
+
+    assert matrix["computable"] is False
+    assert "plan.yaml" in matrix["reason"]
+    assert matrix["rows"] == [], "不得用执行结果反推一个看起来完整的矩阵"
+
+
+# ---------------------------------------------------------------- 计划加载
+def test_load_plan_rejects_unknown_field(tmp_path):
+    file = tmp_path / "plan.yaml"
+    file.write_text(
+        "test_cases:\n  - id: TC-1\n    typo_field: x\n", encoding="utf-8")
+
+    with pytest.raises(PlanError, match="不合规"):
+        load_plan(file)
+
+
+def test_load_plan_rejects_duplicate_id(tmp_path):
+    file = tmp_path / "plan.yaml"
+    file.write_text(
+        "test_cases:\n  - id: TC-1\n  - id: TC-1\n", encoding="utf-8")
+
+    with pytest.raises(PlanError, match="重复"):
+        load_plan(file)
+
+
+def test_load_plan_missing_file_is_reported(tmp_path):
+    with pytest.raises(PlanError, match="不存在"):
+        load_plan(tmp_path / "nope.yaml")
+
+
+def test_load_plan_none_means_absent():
+    assert load_plan(None) is None
+
+
+def test_waiver_requires_reason():
+    with pytest.raises(Exception):
+        Waiver(impact="没有原因")
+
+
+def test_evaluate_case_is_pure(tmp_path):
+    """evaluate_case 不读全局状态，可单独调用。"""
+    document = _doc([_exec("TC-1", assertions=[_assertion()])])
+    row = evaluate_case(PlannedCase(id="TC-1"), document.executions)
+
+    assert row["state"] == "verified"
+    assert row["verdict"] == Verdict.PASS.value
