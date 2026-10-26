@@ -106,9 +106,13 @@ riqor 侧聚合时：`status=passed` 但 `verdict=invalid` 的实例
 ```text
 set(execution.json.executions where status != not_run)
   == set(junit.xml testcase 解析出的 auto_id)
-  == set(case-inventory.yaml cases[].id)
+  == set(case-inventory.yaml cases[].id where execution_status != not_run)
 有参数实例时按 (auto_id, instance) 二元组比较
 ```
+
+`case-inventory.yaml` **保留** `not_run` 实例（它确实被选中了，只是没跑），
+但 JUnit 不写 testcase，所以三方对齐时都排除 `not_run`。
+实现见 `evidence/bundle.py::check_consistency`。
 
 ### C2 状态一致
 

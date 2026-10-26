@@ -117,6 +117,8 @@ class ExecutionRecord(_Model):
     tp: str | None = None
     intent: str = ""
     nodeid: str = ""
+    #: 参数实例身份 {id, params}，参数化用例靠它区分，避免互相覆盖
+    param_instance: dict[str, Any] | None = None
     execution_status: ExecutionStatus
     verdict: Verdict | None = None
     duration_s: float = 0.0

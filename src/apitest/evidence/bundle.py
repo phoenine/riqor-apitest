@@ -1,0 +1,268 @@
+"""证据包落盘：execution.json / junit.xml / case-inventory.yaml / manifest.json。
+
+四件必须描述**同一批实例**。这里由同一份 ``EvidenceDocument`` 生成，
+生成后再做一次交叉校验，不一致就抛错 —— 不允许两份各说各话。
+
+契约见 ``docs/evidence-schema.md``。
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from xml.sax.saxutils import escape, quoteattr
+
+import yaml
+
+from apitest.evidence.models import (
+    EvidenceDocument,
+    ExecutionRecord,
+    ExecutionStatus,
+    Verdict,
+)
+
+SCHEMA_VERSION = 1
+
+#: execution_status → junit 元素（None 表示不写 testcase，用"缺失"表达未运行）
+_JUNIT_ELEMENT: dict[str, str | None] = {
+    "passed": None,
+    "failed": "failure",
+    "infrastructure_error": "error",
+    "skipped": "skipped",
+    "blocked": "skipped",          # 语义不同，靠 message 前缀区分
+    "not_run": None,               # 不写，见 evidence-schema.md 3.3
+}
+
+
+class EvidenceConsistencyError(RuntimeError):
+    """四件套描述的不是同一批实例。"""
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _instance_key(record: ExecutionRecord) -> tuple[str, str]:
+    """(auto_id, 参数实例) —— 参数化用例必须按二元组区分，否则会互相覆盖。"""
+    instance = ""
+    if record.param_instance:
+        instance = str(record.param_instance.get("id", ""))
+    return record.auto_id, instance
+
+
+def _testcase_name(record: ExecutionRecord) -> str:
+    auto_id, instance = _instance_key(record)
+    return f"{auto_id}[{instance}]" if instance else auto_id
+
+
+# ---------------------------------------------------------------- junit
+def build_junit(document: EvidenceDocument) -> str:
+    """从 EvidenceDocument 生成 JUnit XML。
+
+    不用 pytest 内置 junitxml：它由另一条事件路径产生，无法保证与
+    execution.json 同源。
+    """
+    lines: list[str] = ['<?xml version="1.0" encoding="utf-8"?>']
+    counted = [r for r in document.executions
+               if _JUNIT_ELEMENT.get(r.execution_status.value) != "ignore"
+               and r.execution_status is not ExecutionStatus.NOT_RUN]
+
+    failures = sum(1 for r in counted if r.execution_status is ExecutionStatus.FAILED)
+    errors = sum(1 for r in counted
+                 if r.execution_status is ExecutionStatus.INFRASTRUCTURE_ERROR)
+    skipped = sum(1 for r in counted
+                  if r.execution_status in (ExecutionStatus.SKIPPED,
+                                            ExecutionStatus.BLOCKED))
+    total_time = sum(r.duration_s for r in counted)
+
+    lines.append(
+        f'<testsuites name="apitest" tests="{len(counted)}" failures="{failures}" '
+        f'errors="{errors}" skipped="{skipped}" time="{total_time:.3f}">')
+    lines.append(
+        f'  <testsuite name={quoteattr(document.meta.project_id or "apitest")} '
+        f'tests="{len(counted)}" failures="{failures}" errors="{errors}" '
+        f'skipped="{skipped}" time="{total_time:.3f}" '
+        f'timestamp={quoteattr(document.meta.started_at or "")}>')
+
+    for record in counted:
+        element = _JUNIT_ELEMENT.get(record.execution_status.value)
+        lines.append(
+            f'    <testcase classname={quoteattr(record.nodeid or record.auto_id)} '
+            f'name={quoteattr(_testcase_name(record))} '
+            f'time="{record.duration_s:.3f}">')
+
+        if element == "failure":
+            reason = record.assertions[0].failure_reason if record.assertions else ""
+            message = reason or record.message or "断言失败"
+            lines.append(f'      <failure message={quoteattr(message)}>'
+                         f'{escape(record.message or message)}</failure>')
+        elif element == "error":
+            lines.append(f'      <error message={quoteattr(record.message or "基础设施错误")}/>')
+        elif element == "skipped":
+            prefix = "blocked" if record.execution_status is ExecutionStatus.BLOCKED else "skipped"
+            lines.append(
+                f'      <skipped message={quoteattr(f"{prefix}: {record.message}")}/>')
+
+        lines.append("    </testcase>")
+
+    lines.append("  </testsuite>")
+    lines.append("</testsuites>")
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------- inventory
+def build_inventory(document: EvidenceDocument) -> dict[str, Any]:
+    cases = []
+    for record in document.executions:
+        auto_id, instance = _instance_key(record)
+        item: dict[str, Any] = {
+            "id": auto_id,
+            "nodeid": record.nodeid,
+            "execution_status": record.execution_status.value,
+        }
+        if instance:
+            item["instance"] = instance
+        if record.tc:
+            item["tc"] = record.tc
+        if record.tp:
+            item["tp"] = record.tp
+        if record.intent:
+            item["intent"] = record.intent
+        cases.append(item)
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "execution_id": document.meta.execution_id,
+        "project_id": document.meta.project_id,
+        "environment": document.meta.environment,
+        "cases": cases,
+    }
+
+
+# ---------------------------------------------------------------- 一致性
+def check_consistency(document: EvidenceDocument, junit_ids: set[str],
+                      inventory_cases: list[dict[str, Any]]) -> dict[str, Any]:
+    """C1：三件描述同一批实例。不一致直接报错，不静默取其一。
+
+    ``not_run`` 的实例在 inventory 里**保留**（它确实被选中了，只是没跑），
+    但 JUnit 不写 testcase。所以比较时三方都排除 ``not_run``。
+    """
+    expected = {_testcase_name(r) for r in document.executions
+                if r.execution_status is not ExecutionStatus.NOT_RUN}
+    inventory_ids = {_testcase_name_of(item) for item in inventory_cases
+                     if item.get("execution_status") != "not_run"}
+
+    problems: list[str] = []
+    if expected != junit_ids:
+        problems.append(
+            f"junit 实例集合与 execution.json 不一致："
+            f"仅 junit 有 {sorted(junit_ids - expected)}；"
+            f"仅 json 有 {sorted(expected - junit_ids)}")
+    if expected != inventory_ids:
+        problems.append(
+            f"inventory 实例集合与 execution.json 不一致："
+            f"仅 inventory 有 {sorted(inventory_ids - expected)}；"
+            f"无 {sorted(expected - inventory_ids)}")
+
+    if problems:
+        raise EvidenceConsistencyError("；".join(problems))
+
+    return {
+        "execution_vs_junit": "ok",
+        "execution_vs_inventory": "ok",
+        "instances": len(expected),
+        "excluded_not_run": sum(1 for r in document.executions
+                                if r.execution_status is ExecutionStatus.NOT_RUN),
+    }
+
+
+def _parse_junit_ids(xml_text: str) -> set[str]:
+    import re
+
+    return set(re.findall(r'<testcase\b[^>]*\bname="([^"]*)"', xml_text))
+
+
+# ---------------------------------------------------------------- 主入口
+def write_bundle(document: EvidenceDocument, evidence_dir: Path,
+                 extra_files: dict[str, str] | None = None) -> Path:
+    """写出完整证据包，返回 manifest 路径。"""
+    evidence_dir = Path(evidence_dir)
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+
+    execution_path = evidence_dir / "execution.json"
+    execution_path.write_text(document.model_dump_json(indent=2), encoding="utf-8")
+
+    junit_text = build_junit(document)
+    junit_path = evidence_dir / "junit.xml"
+    junit_path.write_text(junit_text, encoding="utf-8")
+
+    inventory = build_inventory(document)
+    inventory_path = evidence_dir / "case-inventory.yaml"
+    inventory_path.write_text(
+        yaml.safe_dump(inventory, allow_unicode=True, sort_keys=False),
+        encoding="utf-8")
+
+    for name, content in (extra_files or {}).items():
+        (evidence_dir / name).write_text(content, encoding="utf-8")
+
+    consistency = check_consistency(
+        document, _parse_junit_ids(junit_text), inventory["cases"])
+
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "execution_id": document.meta.execution_id,
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "meta": {
+            "project_id": document.meta.project_id,
+            "environment": document.meta.environment,
+            "base_url": document.meta.base_url,
+            "exit_code": document.meta.exit_code,
+            "command": document.meta.command,
+            "code_version": document.meta.code_version,
+            "config_digest": document.meta.config_digest,
+        },
+        "counts": document.counts(),
+        "verdicts": document.verdict_counts(),
+        "basis_coverage": document.basis_coverage(),
+        "consistency": consistency,
+        "files": {},
+    }
+
+    # 只登记标准文件：executions.jsonl 是中间产物，attachments 按需读，
+    # 都不该进契约校验范围
+    for name in ("execution.json", "junit.xml", "case-inventory.yaml"):
+        path = evidence_dir / name
+        manifest["files"][name] = {
+            "sha256": _sha256(path),
+            "bytes": path.stat().st_size,
+        }
+
+    manifest_path = evidence_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return manifest_path
+
+
+def _testcase_name_of(item: dict[str, Any]) -> str:
+    instance = item.get("instance")
+    return f"{item['id']}[{instance}]" if instance else item["id"]
+
+
+__all__ = [
+    "SCHEMA_VERSION",
+    "EvidenceConsistencyError",
+    "build_junit",
+    "build_inventory",
+    "check_consistency",
+    "write_bundle",
+]
+
+
+# 供类型检查器使用的空引用（Verdict 在映射里被间接使用）
+_ = Verdict

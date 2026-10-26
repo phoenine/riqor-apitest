@@ -206,5 +206,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         ),
         executions=executions,
     )
-    (evidence_dir / "execution.json").write_text(
-        document.model_dump_json(indent=2), encoding="utf-8")
+    from apitest.evidence.bundle import write_bundle
+
+    # 四件套由同一份 document 生成，生成时交叉校验实例集合
+    write_bundle(document, evidence_dir)
