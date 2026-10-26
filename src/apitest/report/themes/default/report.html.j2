@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<style>
+  :root {
+    --fg: #1f2328; --muted: #656d76; --line: #d0d7de; --bg: #ffffff;
+    --soft: #f6f8fa;
+    --ok: #1a7f37; --bad: #cf222e; --warn: #9a6700; --info: #0969da; --gray: #6e7781;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 20px 80px; background: var(--bg); color: var(--fg);
+    font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  main { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 14px; margin: 24px 0 8px; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .meta code { background: var(--soft); padding: 1px 5px; border-radius: 4px; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 16px 0; }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  .card .n { font-size: 26px; font-weight: 600; line-height: 1.2; }
+  .card .k { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .card.pass .n { color: var(--ok); }
+  .card.fail .n { color: var(--bad); }
+  .card.inconclusive .n { color: var(--warn); }
+  .card.invalid .n { color: var(--info); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--soft); font-weight: 600; color: var(--muted); font-size: 12px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .tag.pass { background: #dafbe1; color: var(--ok); }
+  .tag.fail { background: #ffebe9; color: var(--bad); }
+  .tag.inconclusive { background: #fff8c5; color: var(--warn); }
+  .tag.invalid { background: #ddf4ff; color: var(--info); }
+  .tag.none { background: var(--soft); color: var(--gray); }
+  .tag.observed { background: #fff8c5; color: var(--warn); }
+  .tag.verified { background: #dafbe1; color: var(--ok); }
+
+  .note { border-left: 3px solid var(--warn); background: #fffdf3; padding: 10px 14px; margin: 12px 0; font-size: 13px; }
+  .note.bad { border-color: var(--bad); background: #fff5f5; }
+  .note.ok { border-color: var(--ok); background: #f3fbf5; }
+
+  .case { border: 1px solid var(--line); border-radius: 8px; margin: 12px 0; overflow: hidden; }
+  .case > header { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; background: var(--soft); flex-wrap: wrap; }
+  .case > header .id { font-weight: 600; }
+  .case > header .intent { color: var(--muted); font-size: 13px; flex: 1 1 320px; }
+  .case .body { padding: 4px 14px 12px; }
+  .case pre { background: var(--soft); padding: 8px 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; }
+  details summary { cursor: pointer; color: var(--info); font-size: 13px; margin: 6px 0; }
+  .muted { color: var(--muted); }
+  .empty { color: var(--muted); font-style: italic; }
+  @media print { body { padding: 0; } details { display: block; } }
+</style>
+</head>
+<body>
+<main>
+
+  <h1>{{ title }}</h1>
+  <p class="meta">
+    项目 <code>{{ meta.project_id }}</code> ·
+    环境 <code>{{ meta.environment }}</code> ·
+    地址 <code>{{ meta.base_url }}</code> ·
+    执行 <code>{{ meta.execution_id }}</code>
+    {% if meta.exit_code is not none %} · 退出码 <code>{{ meta.exit_code }}</code>{% endif %}
+  </p>
+
+  <!-- ============================================ 第一层：摘要 -->
+  <h2>摘要</h2>
+
+  <div class="cards">
+    {% for row in summary.verdict_rows %}
+    <div class="card {{ row.key }}">
+      <div class="n">{{ row.count }}</div>
+      <div class="k">{{ row.label }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <h3>执行是否完整</h3>
+  <table>
+    <thead><tr><th>执行状态</th><th class="num">数量</th></tr></thead>
+    <tbody>
+      {% for row in summary.status_rows %}
+      <tr><td>{{ row.label }} <span class="muted mono">{{ row.key }}</span></td><td class="num">{{ row.count }}</td></tr>
+      {% endfor %}
+      <tr><td><strong>合计</strong></td><td class="num"><strong>{{ summary.total }}</strong></td></tr>
+    </tbody>
+  </table>
+  {% if summary.has_no_verdict %}
+  <div class="note">
+    有实例没有验证结论（跳过 / 未运行 / 基础设施错误）。这些<strong>不是通过</strong>，也不计入通过率。
+  </div>
+  {% endif %}
+
+  <h3>断言的依据覆盖</h3>
+  <p>
+    已证实的依据（需求 / 规范 / 参考计算）：<strong>{{ summary.basis_verified }}</strong> 条；
+    仅观察到的值（measured / observed）：<strong>{{ summary.basis_unverified }}</strong> 条。
+  </p>
+  {% if summary.basis_unverified > 0 %}
+  <div class="note">
+    后者只能说明「当时是这样」，不能证明「应该这样」。它们不计入已验证覆盖。
+  </div>
+  {% endif %}
+
+  {% if summary.pass_ratio is not none %}
+  <p class="meta">
+    通过率 {{ summary.pass_ratio }}% — 分母只含真正执行过且能得出验证结论的实例；
+    跳过、未运行、基础设施错误与「无法验证」都不计入。
+  </p>
+  {% else %}
+  <p class="meta">未执行任何实例，无通过率。</p>
+  {% endif %}
+
+  {% if planned %}
+  <h3>覆盖缺口</h3>
+  {% if missing %}
+  <div class="note bad">
+    计划验证 {{ planned|length }} 个测试用例，其中以下 {{ missing|length }} 个没有任何自动化实现或执行记录：
+    {% for tc in missing %}<code>{{ tc }}</code>{% if not loop.last %}、{% endif %}{% endfor %}
+  </div>
+  {% else %}
+  <div class="note ok">计划范围 {{ planned|length }} 个测试用例全部有对应结果。</div>
+  {% endif %}
+  {% endif %}
+
+  <!-- ============================================ 第二层：需求覆盖 -->
+  <h2>需求覆盖</h2>
+  {% if coverage %}
+  <table>
+    <thead>
+      <tr><th>测试用例</th><th>验证结论</th><th>自动化用例</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      {% for group in coverage %}
+      <tr>
+        <td class="mono">{{ group.tc }}</td>
+        <td>
+          {% if group.worst %}
+          <span class="tag {{ group.worst }}">{{ labels.verdict[group.worst] }}</span>
+          {% else %}
+          <span class="tag none">无结论</span>
+          {% endif %}
+        </td>
+        <td class="mono">
+          {% for item in group.executions %}{{ item.auto_id }}{% if not loop.last %}, {% endif %}{% endfor %}
+        </td>
+        <td>
+          {% for item in group.executions %}
+          <div>{{ item.intent or "（未填写意图）" }}</div>
+          {% endfor %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">没有用例声明 TC 归属，无法按需求组织。给 @case(tc="TC-xxx") 补上关联即可。</p>
+  {% endif %}
+
+  {% if unlinked %}
+  <p class="meta">另有 {{ unlinked|length }} 条用例未关联 TC，见下方证据详情。</p>
+  {% endif %}
+
+  <!-- ============================================ 第三层：证据详情 -->
+  <h2>证据详情</h2>
+  {% for item in executions %}
+  <section class="case">
+    <header>
+      <span class="id mono">{{ item.auto_id }}</span>
+      {% if item.tc %}<span class="mono muted">{{ item.tc }}</span>{% endif %}
+      <span class="intent">{{ item.intent }}</span>
+      <span class="tag {{ item.verdict or 'none' }}">{{ item.verdict_label }}</span>
+      <span class="muted mono">{{ item.status_label }} · {{ '%.3f'|format(item.duration_s) }}s</span>
+    </header>
+    <div class="body">
+      {% if item.message %}
+      <pre>{{ item.message }}</pre>
+      {% endif %}
+
+      {% if item.preconditions %}
+      <h3>数据前提</h3>
+      <table>
+        <thead><tr><th>前提</th><th>成立</th><th>来源</th><th>说明</th></tr></thead>
+        <tbody>
+          {% for p in item.preconditions %}
+          <tr>
+            <td class="mono">{{ p.name }}</td>
+            <td>{% if p.holds %}是{% else %}<strong class="tag inconclusive">不成立</strong>{% endif %}</td>
+            <td class="mono muted">{{ p.source.get('kind', '') }}:{{ p.source.get('ref', '') }}</td>
+            <td>{{ p.message }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      {% if item.assertions %}
+      <h3>断言（{{ item.assertion_count }} 条 · 依据已证实 {{ item.basis_verified }} / 未证实 {{ item.basis_unverified }}）</h3>
+      <table>
+        <thead>
+          <tr><th>ID</th><th>比较</th><th>期望</th><th>实际</th><th>依据</th><th>结果</th></tr>
+        </thead>
+        <tbody>
+          {% for a in item.assertions %}
+          <tr>
+            <td class="mono">{{ a.id }}</td>
+            <td class="mono">{{ a.kind }}</td>
+            <td class="mono">{{ a.expected }}{% if a.tolerance is not none %} <span class="muted">±{{ a.tolerance }}</span>{% endif %}</td>
+            <td class="mono">{{ a.actual }}</td>
+            <td>
+              <span class="tag {{ 'verified' if a.basis_verified else 'observed' }}">{{ a.basis_kind }}</span>
+              {% if a.basis_ref %}<div class="mono muted">{{ a.basis_ref }}</div>{% endif %}
+              {% if a.basis_inputs %}
+              <details><summary>入参</summary><pre>{{ a.basis_inputs }}</pre></details>
+              {% endif %}
+            </td>
+            <td>
+              {% if a.passed %}<span class="tag pass">通过</span>{% else %}<span class="tag fail">失败</span>{% endif %}
+              {% if a.message %}<div class="muted">{{ a.message }}</div>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">这条用例没有产生断言 —— 它没有验证任何内容。</p>
+      {% endif %}
+
+      <details>
+        <summary>用例标识</summary>
+        <pre>{{ item.nodeid }}</pre>
+      </details>
+    </div>
+  </section>
+  {% endfor %}
+
+  <p class="meta" style="margin-top:40px">
+    由 apitest 生成 · schema v{{ meta.schema_version }} ·
+    证据目录 <code>{{ meta.execution_id }}</code>
+  </p>
+</main>
+</body>
+</html>

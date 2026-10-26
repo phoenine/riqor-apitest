@@ -1,0 +1,29 @@
+project:
+  id: demo
+  name: Demo API
+
+default_environment: mock
+
+environments:
+  mock:
+    # 由 conftest 的 mock_api fixture 注入实际端口
+    base_url: ${DEMO_BASE_URL}
+    auth:
+      type: bearer
+      token_env: DEMO_TOKEN
+    headers:
+      Accept: application/json
+    timeout_s: 10
+    verify_tls: false
+
+datasets:
+  reference:
+    type: static
+    tables:
+      production: data/production.csv
+      users: data/users.json
+
+report:
+  theme: default
+  title: Demo API 测试报告
+  output_dir: outputs/reports
