@@ -15,25 +15,13 @@
 | 证据包四件套 + 交叉校验 | `evidence/bundle.py` | `tests/test_riqor_contract.py` |
 | **真实 riqor 消费方导入** | `tests/test_riqor_import.py` | 参数实例 / not_run / TC 追溯 |
 | 计划清单 + 覆盖矩阵（两维度） | `plan.py`、`report/` | `tests/test_plan.py` |
+| 必要验证项稳定 ID + 按项汇总 | `plan.py` | `tests/test_plan.py` |
 | HTML 报告三层 + 主题可复制 | `report/` | 同上 |
 | CLI：init / scaffold / verify / run / check / render | `runner/cli.py` | 手工 + 示例 |
 
-当前测试：`tests/` 76 条 + `examples/demo/` 7 条，全绿。
+当前测试：`tests/` 78 条 + `examples/demo/` 7 条，全绿。
 
 ## 未完成（按优先级）
-
-### P1 覆盖矩阵：必要验证项的稳定身份
-
-现在 `required_assertions` 是自然语言，靠断言 `intent` 文本匹配来判断
-「部分验证」。这是启发式，机器无法可靠区分「没覆盖」与「措辞不同」。
-
-要做：
-
-- 必要验证项分配稳定 ID（如 `RA-01`），计划里列出
-- 用例显式声明覆盖哪些项：`expect(..., covers="RA-01")`
-- 按项汇总后再形成 TC 结论，**不是逐用例取最弱**
-  （两条用例各自覆盖一半，合起来是完整覆盖）
-- 「豁免」保持为附加标记，不改变原始失败/缺口状态
 
 ### P2 执行可靠性
 

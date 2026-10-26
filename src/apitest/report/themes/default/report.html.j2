@@ -172,7 +172,12 @@
         <td>
           {{ row.note }}
           {% if row.uncovered %}
-          <div class="muted">未覆盖：{% for item in row.uncovered %}{{ item }}{% if not loop.last %}；{% endif %}{% endfor %}</div>
+          <div class="muted">
+            未覆盖：
+            {% for item in row.uncovered %}
+            <code>{{ item.id }}</code>{% if item.text %} {{ item.text }}{% endif %}{% if not item.id_explicit %} <span class="tag observed">ID 非显式</span>{% endif %}{% if not loop.last %}；{% endif %}
+            {% endfor %}
+          </div>
           {% endif %}
           {% if row.waived %}
           <div class="waiver">

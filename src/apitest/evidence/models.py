@@ -93,6 +93,8 @@ class AssertionRecord(_Model):
     failure_reason: str = ""          # 面向用户的失败说明
     check: Check = Check.NOT_RUN
     refs: list[str] = Field(default_factory=list)
+    #: 本断言覆盖了计划里的哪些必要验证项（plan.yaml 的 required_assertions.id）
+    covers: list[str] = Field(default_factory=list)
 
     @property
     def verified(self) -> bool:
@@ -143,9 +145,9 @@ class ExecutionRecord(_Model):
         1. 根本没执行（skipped/not_run/infrastructure_error）      → 无结论
         2. 执行失败（status=failed）                             → fail
            ★ 已知业务失败不能被任何前提覆盖
-        3. blocked                                              → 无结论
-        4. 前提检查失败（holds=None）                             → invalid
-        5. 前提不成立（holds=False）                              → inconclusive
+        3. 前提检查失败（holds=None）                             → invalid
+        4. 前提不成立（holds=False）                              → inconclusive
+        5. blocked（且前提无问题）                                → 无结论
         6. 存在存活断言                                          → invalid
         7. 没有断言（原生 assert 未记录）                          → invalid
         8. 存在未完成断言（error/not_reached/skipped/failed）      → invalid
@@ -166,13 +168,15 @@ class ExecutionRecord(_Model):
         if self.execution_status == ExecutionStatus.FAILED:
             return Verdict.FAIL
 
-        if self.execution_status is ExecutionStatus.BLOCKED:
-            return None
-
+        # 前提判定排在 BLOCKED 之前：被阻塞且前提不成立时，事实是
+        # 「无法验证」而不是「什么都没说」
         if any(p.holds is None for p in self.preconditions):
             return Verdict.INVALID
         if any(p.holds is False for p in self.preconditions):
             return Verdict.INCONCLUSIVE
+
+        if self.execution_status is ExecutionStatus.BLOCKED:
+            return None
 
         if any(a.check is Check.SURVIVED for a in self.assertions):
             return Verdict.INVALID

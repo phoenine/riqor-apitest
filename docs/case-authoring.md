@@ -148,8 +148,11 @@ def test_x(api, data):
 test_cases:
   - id: TC-008
     title: 劣化趋势默认口径
-    required_assertions:        # 用来看「部分验证」
-      - 缺省与显式 p50 等价
+    required_assertions:        # 每项有稳定 ID
+      - id: RA-01
+        text: 缺省与显式 p50 等价
+      - id: RA-02
+        text: 与 average 口径不同
   - id: TC-009
     title: 样本数与明细核对
     waived:                     # 豁免：缺口保留，只标注原因
@@ -164,17 +167,19 @@ report:
   plan: plan.yaml
 ```
 
-**`required_assertions` 靠断言 `intent` 文本匹配**。所以写断言时给
-`intent=` 补一句人话：
+**断言用 `covers=` 声明覆盖哪一项**：
 
 ```python
 expect(payload["page"]).equal_to(1, basis=req("REQ-1", confirmed=True),
+                                 covers="RA-01",
                                  intent="第一页",
                                  source="response.page")
 ```
 
-不写 `intent` 的断言，`required_assertions` 覆盖不到，TC 会显示「部分验证」。
-这不是 bug，是提醒：没写清在验什么，就无法确定验到了。
+- 不写 `covers` 的断言，无法确定覆盖了哪个验证项 → 该 TC 显示「部分验证」
+- 一个断言的结论不影响覆盖判定：**失败了也算覆盖了**（结论记 fail），
+  但 `not_reached`（根本没跑到）不算覆盖
+- 覆盖按「项」累计：两条用例各覆盖一半，合起来就是完整覆盖
 
 没有 `plan.yaml` 时，报告显示「覆盖矩阵不可计算」——不会假装完整。
 

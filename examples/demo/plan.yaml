@@ -1,10 +1,14 @@
 # 计划清单：描述「应该验什么」，与本次执行无关。
 # 覆盖矩阵只从这里算 —— 执行结果里根本没有「从未实现」的 TC。
+#
+# required_assertions 的 id 是稳定标识，用例用 expect(..., covers="RA-01") 声明覆盖。
+# 只写自然语言也能加载，但会自动编号（增删项会漂移），不建议。
 test_cases:
   - id: TC-1
     title: 用户列表缺省分页
     required_assertions:
-      - 第一页
+      - id: RA-01
+        text: 缺省返回第一页
   - id: TC-2
     title: pageSize 生效
   - id: TC-3
@@ -14,7 +18,8 @@ test_cases:
   - id: TC-5
     title: 产量总和与明细核对
     required_assertions:
-      - 总和
+      - id: RA-01
+        text: 接口总和等于明细参考计算
   - id: TC-6
     title: 停用用户不计入活跃统计
   - id: TC-7

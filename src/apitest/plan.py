@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from apitest.evidence.models import EvidenceDocument, ExecutionRecord, ExecutionStatus
 
@@ -36,14 +36,61 @@ class Waiver(BaseModel):
     impact: str = ""
 
 
+class RequiredAssertion(BaseModel):
+    """一项必要验证。
+
+    ``id`` 是稳定标识，用例用 ``expect(..., covers="RA-01")`` 显式声明覆盖。
+    早期版本靠自然语言文本匹配 ``intent``，机器无法可靠区分「没覆盖」与
+    「措辞不同」，已弃用。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    text: str = ""
+    #: False 表示计划里只写了自然语言，ID 由位置自动生成 —— 不稳定，建议手写
+    id_explicit: bool = True
+
+
 class PlannedCase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
     title: str = ""
-    #: 该 TC 必须覆盖的验证点（用于判定「部分验证」）
-    required_assertions: list[str] = Field(default_factory=list)
+    #: 该 TC 必须覆盖的验证项（用于判定「部分验证」）
+    required_assertions: list[RequiredAssertion] = Field(default_factory=list)
     waived: Waiver | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalise_required(cls, data: Any) -> Any:
+        """允许写自然语言，自动编号为 RA-01/RA-02…
+
+        自动编号依赖列表顺序，增删项会让编号漂移。所以报告里会标注
+        「ID 非显式」，提醒改成 {id, text} 形式。
+        """
+        if not isinstance(data, dict):
+            return data
+        raw = data.get("required_assertions") or []
+        items: list[dict[str, Any]] = []
+        for index, item in enumerate(raw, start=1):
+            if isinstance(item, str):
+                items.append({"id": f"RA-{index:02d}", "text": item,
+                              "id_explicit": False})
+            elif isinstance(item, dict):
+                items.append({**item, "id_explicit": True})
+            else:
+                raise PlanError(
+                    "required_assertions 的每一项必须是字符串或 {id, text}")
+        data = {**data, "required_assertions": items}
+        return data
+
+    @model_validator(mode="after")
+    def _check_unique_ids(self) -> "PlannedCase":
+        ids = [item.id for item in self.required_assertions]
+        if len(set(ids)) != len(ids):
+            raise PlanError(f"{self.id} 的 required_assertions 里 ID 重复")
+        return self
 
 
 class Plan(BaseModel):
@@ -130,19 +177,32 @@ def _executions_for_tc(document: EvidenceDocument,
     return [record for record in document.executions if record.tc == tc]
 
 
-def _uncovered_requirements(record_list: list[ExecutionRecord],
-                            required: list[str]) -> list[str]:
-    """必需验证点里，没有任何断言意图覆盖的项。
+def _covered_ids(record_list: list[ExecutionRecord]) -> set[str]:
+    """该 TC 下所有断言声明的覆盖项。
 
-    判定方式是断言 ``intent`` 是否包含该验证点的文字 —— 这是启发式，
-    所以 ``case-authoring.md`` 要求 ``intent`` 写成可读的一句话，
-    而不是「验证接口正常」。
+    覆盖 = 「验了」，不是「过了」——失败的断言也覆盖了它对应的验证项
+    （结论会记 fail）。但 ``not_reached`` 不算：它根本没跑到。
     """
-    if not required:
-        return []
-    texts = [(a.intent or a.message or "") for r in record_list for a in r.assertions]
-    return [req for req in required
-            if not any(req in text for text in texts)]
+    covered: set[str] = set()
+    for record in record_list:
+        for assertion in record.assertions:
+            if assertion.result != "not_reached":
+                covered.update(assertion.covers)
+    return covered
+
+
+def _uncovered(case: PlannedCase,
+               record_list: list[ExecutionRecord]) -> list[dict[str, Any]]:
+    """按「项」算缺口，不是按「用例」算。
+
+    两条用例各自覆盖一半，合起来就是完整覆盖 —— 所以不能逐用例取最弱。
+    """
+    covered = _covered_ids(record_list)
+    return [
+        {"id": item.id, "text": item.text, "id_explicit": item.id_explicit}
+        for item in case.required_assertions
+        if item.id not in covered
+    ]
 
 
 def evaluate_case(case: PlannedCase,
@@ -155,7 +215,7 @@ def evaluate_case(case: PlannedCase,
             "state": CoverageState.NOT_IMPLEMENTED.value,
             "verdict": None,
             "executions": [],
-            "uncovered": list(case.required_assertions),
+            "uncovered": _uncovered(case, record_list),
             "waived": case.waived.model_dump() if case.waived else None,
             "note": "计划里有，但没有任何用例声明该 TC",
         }
@@ -172,9 +232,20 @@ def evaluate_case(case: PlannedCase,
             "tc": case.id, "title": case.title,
             "state": CoverageState.NOT_RUN.value, "verdict": None,
             "executions": record_list,
-            "uncovered": list(case.required_assertions),
+            "uncovered": _uncovered(case, record_list),
             "waived": case.waived.model_dump() if case.waived else None,
             "note": "有用例，本次未执行",
+        }
+
+    if verdict is None:
+        # 该 TC 下没有任何实例得出验证结论（全部 blocked 且前提无问题）
+        return {
+            "tc": case.id, "title": case.title,
+            "state": CoverageState.NOT_RUN.value, "verdict": None,
+            "executions": record_list,
+            "uncovered": _uncovered(case, record_list),
+            "waived": case.waived.model_dump() if case.waived else None,
+            "note": "执行了但没有得出验证结论（被阻塞或未到达断言）",
         }
 
     if verdict == "inconclusive":
@@ -182,12 +253,12 @@ def evaluate_case(case: PlannedCase,
             "tc": case.id, "title": case.title,
             "state": CoverageState.INCONCLUSIVE.value, "verdict": verdict,
             "executions": record_list,
-            "uncovered": _uncovered_requirements(record_list, case.required_assertions),
+            "uncovered": _uncovered(case, record_list),
             "waived": case.waived.model_dump() if case.waived else None,
             "note": "前置条件不成立，不能据此判断产品对错",
         }
 
-    uncovered = _uncovered_requirements(record_list, case.required_assertions)
+    uncovered = _uncovered(case, record_list)
     if uncovered:
         return {
             "tc": case.id, "title": case.title,

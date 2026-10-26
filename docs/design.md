@@ -339,8 +339,12 @@ apitest init / scaffold / verify / run / check / render
 - 豁免不改变覆盖状态、不移除缺口展示，但单独计数
 - 没有 `plan.yaml` → 矩阵 `computable: false`，报告显示「不可计算」，
   而不是全部算已验证
-- `required_assertions` 的覆盖判定靠断言 `intent` 文本匹配 ——
-  这是启发式，所以 `intent` 必须写成可读的一句话（见 `case-authoring.md`）
+- `required_assertions` 有稳定 ID（`RA-01`），断言用 `covers="RA-01"` 显式声明覆盖
+- **按「验证项」汇总，不是按「用例」取最弱**：两条用例各自覆盖一半，
+  合起来是完整覆盖 —— 逐用例取最弱会把完整覆盖误判成部分验证
+- 覆盖 = 「验了」，失败也覆盖（结论记 fail）；但 `not_reached` 不算覆盖
+- 没有任何实例得出验证结论时（如全部 blocked），覆盖状态记 `not_run`，
+  不得判 `verified`
 
 ### 6.2 模板自定义
 

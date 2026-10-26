@@ -28,12 +28,13 @@ from apitest.plan import (
 
 
 def _assertion(intent: str = "验一个字段", confirmed: bool = True,
-               passed: bool = True) -> AssertionRecord:
+               passed: bool = True, covers: list[str] | None = None,
+               result: str = "passed") -> AssertionRecord:
     return AssertionRecord(
         id="AS-0001", kind="equal_to", intent=intent,
         expected=1, actual=1,
         basis=BasisRecord(kind="req", ref="REQ-1", confirmed=confirmed),
-        passed=passed)
+        passed=passed, result=result, covers=covers or [])
 
 
 def _exec(tc: str, status: ExecutionStatus = ExecutionStatus.PASSED,
@@ -88,21 +89,49 @@ def test_inconclusive_when_precondition_fails():
 
 
 def test_partial_when_required_assertion_uncovered():
-    document = _doc([_exec("TC-1", assertions=[_assertion(intent="第一页")])])
-    case = PlannedCase(id="TC-1", required_assertions=["第一页", "总条数"])
+    document = _doc([_exec("TC-1", assertions=[_assertion(covers=["RA-01"])])])
+    case = PlannedCase(id="TC-1", required_assertions=[
+        {"id": "RA-01", "text": "第一页"}, {"id": "RA-02", "text": "总条数"}])
 
     row = build_matrix(document, _plan(case))["rows"][0]
     assert row["state"] == "partial"
-    assert row["uncovered"] == ["总条数"]
+    assert [item["id"] for item in row["uncovered"]] == ["RA-02"]
 
 
-def test_partial_resolves_when_intent_covers_requirement():
-    document = _doc([_exec("TC-1", assertions=[
-        _assertion(intent="第一页"), _assertion(intent="总条数等于 3")])])
-    case = PlannedCase(id="TC-1", required_assertions=["第一页", "总条数"])
+def test_coverage_accumulates_across_cases_in_same_tc():
+    """两条用例各覆盖一半，合起来是完整覆盖 —— 不能逐用例取最弱。"""
+    document = _doc([
+        _exec("TC-1", assertions=[_assertion(covers=["RA-01"])], auto_id="AUTO-001"),
+        _exec("TC-1", assertions=[_assertion(covers=["RA-02"])], auto_id="AUTO-002"),
+    ])
+    case = PlannedCase(id="TC-1", required_assertions=[
+        {"id": "RA-01", "text": "第一页"}, {"id": "RA-02", "text": "总条数"}])
 
     row = build_matrix(document, _plan(case))["rows"][0]
     assert row["state"] == "verified"
+    assert row["uncovered"] == []
+
+
+def test_not_reached_assertion_does_not_cover():
+    """没跑到的断言不算覆盖，即使它声明了 covers。"""
+    document = _doc([_exec("TC-1", assertions=[
+        _assertion(covers=["RA-01"], result="not_reached", passed=False)])])
+    case = PlannedCase(id="TC-1", required_assertions=[
+        {"id": "RA-01", "text": "第一页"}])
+
+    row = build_matrix(document, _plan(case))["rows"][0]
+    assert row["state"] == "partial", "not_reached 没验，不能算覆盖"
+
+
+def test_natural_language_required_ids_are_flagged_unstable():
+    """只写自然语言时自动编号，但必须标出 ID 非显式。"""
+    document = _doc([_exec("TC-1", assertions=[_assertion(covers=["RA-01"])])])
+    case = PlannedCase(id="TC-1", required_assertions=["第一页"])
+
+    row = build_matrix(document, _plan(case))["rows"][0]
+    assert row["state"] == "verified"
+    assert case.required_assertions[0].id == "RA-01"
+    assert case.required_assertions[0].id_explicit is False
 
 
 def test_unconfirmed_when_basis_not_confirmed():

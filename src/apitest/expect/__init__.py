@@ -139,15 +139,17 @@ class Assertion:
 
         def _assert(expected: Any = None, *, basis: Basis | None = None,
                     reason: str = "", source: str | None = None,
-                    intent: str = "", **options: Any) -> None:
-            self._run(name, comparator, expected, basis, reason, source, intent, options)
+                    intent: str = "", covers: Any = None,
+                    **options: Any) -> None:
+            self._run(name, comparator, expected, basis, reason, source,
+                      intent, covers, options)
 
         return _assert
 
     # ------------------------------------------------------------------
     def _run(self, kind: str, comparator: Comparator, expected: Any,
              basis: Basis | None, reason: str, source: str | None,
-             intent: str, options: dict[str, Any]) -> None:
+             intent: str, covers: Any, options: dict[str, Any]) -> None:
         actual = self._actual
         ok, message = comparator(actual, expected, options)
         used_basis = basis or OBSERVED
@@ -168,6 +170,7 @@ class Assertion:
             message=reason if ok else (reason + "；" if reason else "") + message,
             failure_reason="" if ok else message,
             refs=list(options.pop("refs", []) or []),
+            covers=_normalise_covers(covers),
         )
 
         ctx = current_context()
@@ -176,6 +179,15 @@ class Assertion:
 
         if not ok:
             raise AssertionError(_format_failure(record))
+
+
+def _normalise_covers(value: Any) -> list[str]:
+    """``covers=`` 允许写单个字符串或列表。"""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(item) for item in value]
 
 
 def _is_serialisable(value: Any) -> bool:
