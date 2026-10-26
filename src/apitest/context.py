@@ -81,6 +81,8 @@ class CaseContext:
     execution_status: ExecutionStatus = ExecutionStatus.PASSED
     message: str = ""
     duration_s: float = 0.0
+    error_type: str | None = None
+    cleanup_error: str | None = None
 
     assertions: list[AssertionRecord] = field(default_factory=list)
     preconditions: list[PreconditionRecord] = field(default_factory=list)
@@ -151,6 +153,20 @@ class CaseContext:
     def add_precondition(self, record: PreconditionRecord) -> None:
         self.preconditions.append(record)
 
+    def record_error(self, error_type: str, message: str = "") -> None:
+        """记录用例抛出的异常类型。
+
+        与「断言失败」区分：断言失败是业务判据不满足，
+        异常是代码/环境问题，两者在报告里不能混为一谈。
+        """
+        self.error_type = error_type
+        if message and not self.message:
+            self.message = f"{error_type}: {message}"
+
+    def record_cleanup_error(self, message: str) -> None:
+        """清理失败。保留为**独立事实**，不改变断言结论。"""
+        self.cleanup_error = message
+
     def mark(self, status: ExecutionStatus, message: str = "") -> None:
         self.execution_status = status
         if message:
@@ -167,6 +183,8 @@ class CaseContext:
             execution_status=self.execution_status,
             duration_s=round(self.duration_s, 4),
             message=self.message,
+            error_type=self.error_type,
+            cleanup_error=self.cleanup_error,
             preconditions=list(self.preconditions),
             assertions=list(self.assertions),
         )

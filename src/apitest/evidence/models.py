@@ -132,6 +132,10 @@ class ExecutionRecord(_Model):
     verdict: Verdict | None = None
     duration_s: float = 0.0
     message: str = ""
+    #: 用例抛出但未被断言捕获的异常类型（KeyError / TypeError / ...）
+    error_type: str | None = None
+    #: 清理阶段失败。与断言失败**并列保留**，不互相覆盖
+    cleanup_error: str | None = None
     preconditions: list[PreconditionRecord] = Field(default_factory=list)
     assertions: list[AssertionRecord] = Field(default_factory=list)
 

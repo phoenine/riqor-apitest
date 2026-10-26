@@ -127,9 +127,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
         print("没有找到 test_*.py", file=sys.stderr)
         return 1
 
-    problems: list[str] = []
+    problems: list[str] = []      # 配置/用例问题 → exit 1
+    warnings: list[str] = []      # 凭据未提供 → exit 2（不是错误）
     seen: dict[str, str] = {}
     total = 0
+
+    if getattr(args, "config", None):
+        problems, warnings = _check_credentials(args.config, problems, warnings)
 
     for path in files:
         source = path.read_text(encoding="utf-8")
@@ -157,11 +161,43 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     for line in problems:
         print(f"✗ {line}", file=sys.stderr)
+    for line in warnings:
+        print(f"! 未验证：{line}", file=sys.stderr)
+
     if problems:
         print(f"\n{len(problems)} 个问题（检查 {total} 条用例）", file=sys.stderr)
         return 1
+    if warnings:
+        # 凭据没配不是用例写错了 —— 不能和「配置非法」用同一个退出码
+        print(f"\n{len(warnings)} 项因缺少凭据未验证（不算失败，但也没有验证）",
+              file=sys.stderr)
+        return 2
     print(f"✓ {total} 条用例通过执行前校验")
     return 0
+
+
+def _check_credentials(config_path: str, problems: list[str],
+                       warnings: list[str]) -> tuple[list[str], list[str]]:
+    """检查默认环境的凭据是否齐备。
+
+    **只检查当前要用的环境**，不要求所有环境、所有数据源的凭据都存在 ——
+    否则 CI 里的预检查永远过不了。
+    """
+    from apitest.auth import build_auth
+    from apitest.config import ConfigError, load_config
+
+    try:
+        config = load_config(config_path)
+        build_auth(config.environment().auth)
+    except ConfigError as exc:
+        message = str(exc)
+        if "环境变量" in message:
+            warnings.append(message)
+        else:
+            problems.append(message)
+    except Exception as exc:                         # noqa: BLE001
+        problems.append(f"配置无法加载：{type(exc).__name__}: {exc}")
+    return problems, warnings
 
 
 def _read_case_meta(node: Any) -> dict[str, Any] | None:
@@ -315,6 +351,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_verify = sub.add_parser("verify", help="执行前校验（不联网）")
     p_verify.add_argument("--path", nargs="*", default=[])
+    p_verify.add_argument("--config", default=None,
+                          help="顺带检查该配置的凭据；缺失时退出码 2")
     p_verify.set_defaults(func=cmd_verify)
 
     p_run = sub.add_parser("run", help="执行用例")

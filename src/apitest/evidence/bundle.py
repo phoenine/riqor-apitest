@@ -294,6 +294,72 @@ def write_bundle(document: EvidenceDocument, evidence_dir: Path,
     return manifest_path
 
 
+def verify_bundle(evidence_dir: Path) -> list[str]:
+    """校验已有证据包是否完整、未被改动。
+
+    返回问题清单；空列表表示通过。检查三件事：
+
+    1. manifest 里登记的 sha256 与实际文件一致
+    2. 三件套描述的实例集合一致
+    3. manifest 记录了本次一致性结论
+
+    证据被改动或缺失时必须拒绝，不能「尽量读一下」。
+    """
+    evidence_dir = Path(evidence_dir)
+    problems: list[str] = []
+
+    manifest_path = evidence_dir / "manifest.json"
+    if not manifest_path.is_file():
+        return [f"缺少 {manifest_path.name}"]
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [f"manifest.json 不是合法 JSON：{exc}"]
+
+    version = manifest.get("schema_version")
+    if not isinstance(version, int):
+        problems.append("manifest.schema_version 缺失或不是整数")
+    elif version != SCHEMA_VERSION:
+        problems.append(
+            f"schema_version={version}，本读取方支持 {SCHEMA_VERSION}")
+
+    for name, info in (manifest.get("files") or {}).items():
+        path = evidence_dir / name
+        if not path.is_file():
+            problems.append(f"登记的文件缺失：{name}")
+            continue
+        actual = _sha256(path)
+        if actual != info.get("sha256"):
+            problems.append(f"{name} 内容与 manifest 记录的 sha256 不一致（已被改动）")
+
+    if manifest.get("consistency", {}).get("execution_vs_junit") != "ok":
+        problems.append("manifest 未记录成功的一致性结论")
+
+    execution = evidence_dir / "execution.json"
+    if execution.is_file():
+        try:
+            document = EvidenceDocument.model_validate_json(
+                execution.read_text(encoding="utf-8"))
+        except Exception as exc:                     # noqa: BLE001
+            problems.append(f"execution.json 无法解析：{exc}")
+            return problems
+
+        junit = evidence_dir / "junit.xml"
+        if junit.is_file():
+            junit_ids, junit_count = _parse_junit_cases(junit.read_text(encoding="utf-8"))
+            ran = [r for r in document.executions
+                   if r.execution_status is not ExecutionStatus.NOT_RUN]
+            if {r.auto_id for r in ran} != junit_ids:
+                problems.append("junit.xml 与 execution.json 的实例集合不一致")
+            if junit_count != len(ran):
+                problems.append(
+                    f"junit.xml 有 {junit_count} 条 testcase，"
+                    f"execution.json 有 {len(ran)} 个已执行实例")
+
+    return problems
+
+
 __all__ = [
     "SCHEMA_VERSION",
     "EvidenceConsistencyError",
@@ -301,6 +367,7 @@ __all__ = [
     "build_inventory",
     "check_consistency",
     "write_bundle",
+    "verify_bundle",
 ]
 
 

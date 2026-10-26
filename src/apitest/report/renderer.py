@@ -63,8 +63,13 @@ def _assertion_view(record: Any) -> dict[str, Any]:
     return {
         "id": record.id,
         "kind": record.kind,
+        "intent": record.intent,
         "expected": record.expected,
         "actual": record.actual,
+        "actual_source": record.actual_source,
+        "result": record.result,
+        "error_type": record.error_type,
+        "failure_reason": record.failure_reason,
         "tolerance": record.tolerance,
         "passed": record.passed,
         "message": record.message,

@@ -416,6 +416,9 @@ react-flow 只用于关系展示（追溯图、影响面），不替代表格与
 | D8 | 断言抛 KeyError 等非断言异常 | `result=error` + `error_type`，不记 pass |
 | D9 | `verify` 遇到缺凭据 | 退出码 2 而非 1，提示「未验证」而非「配置错误」 |
 
+以上九项均由 `tests/test_scenarios.py` 覆盖。D1/D4/D8 会真实启动 pytest
+子进程，D5/D9 直接校验证据包与退出码。
+
 ### 9.3 编写与阅读体验
 
 | 角色 | 问题 | 合格线 |

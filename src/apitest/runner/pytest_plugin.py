@@ -163,6 +163,8 @@ def _apitest_case(request: pytest.FixtureRequest) -> Iterator[None]:
         intent=meta.intent,
         nodeid=request.node.nodeid,
     ) as ctx:
+        # makereport 阶段（call 失败时）需要读它来记录异常类型
+        request.node._apitest_ctx = ctx      # noqa: SLF001
         try:
             yield
         finally:
@@ -171,6 +173,36 @@ def _apitest_case(request: pytest.FixtureRequest) -> Iterator[None]:
             if ctx.execution_status is ExecutionStatus.PASSED and not ctx.assertions:
                 ctx.mark(ExecutionStatus.BLOCKED,
                          "用例结束时没有任何断言，未验证任何内容")
+
+
+# ---------------------------------------------------------------- 异常捕获
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
+    """把「用例抛了什么异常」记进证据。
+
+    不做这一步，「断言失败」与「代码 KeyError」在报告里长得一样 ——
+    前者是业务判据不满足，后者是代码/环境问题。
+    """
+    outcome = yield
+    report = outcome.get_result()
+    ctx = getattr(item, "_apitest_ctx", None)
+    if ctx is None:
+        return
+
+    if report.when == "call" and report.failed:
+        # ★ pytest 正常关闭 generator fixture，不会把测试异常 throw 进去，
+        #   所以 case_context 的 except 分支在这里不生效 —— 失败状态必须在
+        #   这里落，否则证据里会是一条 status=passed 的谎。
+        if ctx.execution_status is ExecutionStatus.PASSED:
+            detail = str(call.excinfo.value)[:400] if call.excinfo else ""
+            ctx.mark(ExecutionStatus.FAILED, detail)
+
+        # 断言失败是预期结果，不记成「代码异常」
+        if call.excinfo is not None and not issubclass(call.excinfo.type, AssertionError):
+            ctx.record_error(call.excinfo.type.__name__, str(call.excinfo.value)[:500])
+    elif report.when in {"setup", "teardown"} and report.failed:
+        message = f"{call.excinfo.type.__name__}: {call.excinfo.value}" if call.excinfo else "未知错误"
+        ctx.record_cleanup_error(f"{report.when} 阶段失败 — {message}"[:500])
 
 
 # ---------------------------------------------------------------- 收尾

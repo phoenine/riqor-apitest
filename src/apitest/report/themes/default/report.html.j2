@@ -51,6 +51,8 @@
   .state.inconclusive { background: #fff8c5; color: var(--warn); }
   .state.not_run { background: var(--soft); color: var(--gray); }
   .state.not_implemented { background: #ffebe9; color: var(--bad); }
+  .assert-intent { color: var(--fg); font-family: inherit; font-size: 12px; margin-top: 2px; }
+  .assert-source { color: var(--muted); font-size: 11px; margin-top: 1px; }
   .waiver { margin-top: 4px; padding: 4px 8px; background: var(--soft); border-radius: 4px; font-size: 12px; color: var(--muted); }
   .tag.verified { background: #dafbe1; color: var(--ok); }
 
@@ -240,8 +242,14 @@
           <tr>
             <td class="mono">{{ a.id }}</td>
             <td class="mono">{{ a.kind }}</td>
-            <td class="mono">{{ a.expected }}{% if a.tolerance is not none %} <span class="muted">±{{ a.tolerance }}</span>{% endif %}</td>
-            <td class="mono">{{ a.actual }}</td>
+            <td class="mono">
+              {{ a.expected }}{% if a.tolerance is not none %} <span class="muted">±{{ a.tolerance }}</span>{% endif %}
+              {% if a.intent %}<div class="assert-intent">{{ a.intent }}</div>{% endif %}
+            </td>
+            <td class="mono">
+              {{ a.actual }}
+              {% if a.actual_source %}<div class="assert-source">{{ a.actual_source }}</div>{% endif %}
+            </td>
             <td>
               <span class="tag {{ 'verified' if a.basis_verified else 'observed' }}">{{ a.basis_kind }}</span>
               {% if a.basis_ref %}<div class="mono muted">{{ a.basis_ref }}</div>{% endif %}
