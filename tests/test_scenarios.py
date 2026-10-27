@@ -312,7 +312,14 @@ def test_param(api, value):
     assert all(item is not None for item in instances), "实例身份不能为空"
     ids = {item["id"] for item in instances}
     assert len(ids) == 2, f"两个参数实例的 ID 必须不同，实际 {ids}"
-    assert all(item["params"] for item in instances), "参数值也要记录"
+
+    for item in instances:
+        # 索引里放摘要与引用，不放截断后的字符串
+        assert item["params_digest"].startswith("sha256:"), "摘要要带算法名"
+        assert item["params_at"].startswith("attachments/"), "要有附件引用"
+        assert item["replayable"] is True
+        full = json.loads((evidence / item["params_at"]).read_text(encoding="utf-8"))
+        assert "value" in full, "附件里是完整参数对象"
 
     # 附件按实例隔离
     base = evidence / "attachments" / "AUTO-010"

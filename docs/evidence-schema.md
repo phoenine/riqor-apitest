@@ -144,6 +144,29 @@ riqor 侧聚合时：`status=passed` 但 `verdict=invalid` 的实例
 
 有损字段必须在 manifest 里留下指向原始证据的引用，不能只留转换后的值。
 
+**实现**（`src/apitest/evidence/serialize.py`）：
+
+| 情况 | 处理 |
+|---|---|
+| JSON 可表示 | 完整保存，摘要按完整值算 |
+| 超过内联上限（4000 字符） | `truncated: true`，**摘要仍基于完整值** |
+| 自定义对象有 `to_evidence()` | 用它的输出，优先于任何兜底 |
+| 不可序列化 | `{__type__, __repr__}` + `replayable: false` + 原因 |
+| 集合 / 嵌套超过 20 层 | `replayable: false` + 原因 |
+
+**绝不使用 `json.dumps(..., default=str)`** —— 那会把任意对象悄悄变成
+repr 字符串，报告上看不出「这个值已经不可还原」。宁可承认不可重放，
+也不要给一个看起来完整的字符串。
+
+索引写法（不放大对象本体）：
+
+```json
+{"digest": "sha256:ebc00779…", "replayable": true,
+ "at": "attachments/AUTO-005/refs/ref-001.json"}
+```
+
+摘要必须带算法名 —— 裸摘要在两包用不同算法或不同截断长度时无法比较。
+
 ### C4 校验和有效
 
 `manifest.json.files` 中每个文件的 sha256 与实际内容一致。

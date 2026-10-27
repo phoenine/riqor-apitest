@@ -139,6 +139,9 @@ class ProjectMeta(BaseModel):
 
     id: str
     name: str = ""
+    #: 被测服务版本声明。留空则记 unknown —— 跨运行比较时猜不得。
+    service_version: str | None = None
+    service_version_source: str = ""
 
 
 class ProjectConfig(BaseModel):

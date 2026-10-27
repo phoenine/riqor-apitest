@@ -26,6 +26,7 @@ from apitest.config import (
 )
 from apitest.context import case_context, load_executions
 from apitest.dataset import Dataset, build_dataset
+from apitest.runner.versions import collect as collect_versions
 from apitest.evidence.models import EvidenceDocument, ExecutionStatus, Meta
 
 #: fixture 与 sessionfinish 之间的传值（直接用 config 属性在 pytest 里不保证生效）
@@ -180,8 +181,10 @@ def _apitest_case(request: pytest.FixtureRequest) -> Iterator[None]:
         tp=meta.tp,
         intent=meta.intent,
         nodeid=request.node.nodeid,
-        param_instance=param_instance,
+        param_instance=None,      # 先不传：instance_id 决定附件目录
     ) as ctx:
+        if param_instance is not None:
+            ctx.record_param_instance(param_instance["id"], param_instance["params"])
         # makereport 阶段（call 失败时）需要读它来记录异常类型
         request.node._apitest_ctx = ctx      # noqa: SLF001
         try:
@@ -203,10 +206,8 @@ def _param_instance(node: pytest.Node) -> dict[str, Any] | None:
     callspec = getattr(node, "callspec", None)
     if callspec is None:
         return None
-    return {
-        "id": str(callspec.id),
-        "params": {name: repr(value)[:120] for name, value in callspec.params.items()},
-    }
+    # 保留原始对象：截断是展示层的事，采集层不截断
+    return {"id": str(callspec.id), "params": dict(callspec.params)}
 
 
 # ---------------------------------------------------------------- 异常捕获
@@ -272,6 +273,10 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
             base_url=project.environments[env_name].base_url,
             exit_code=int(exitstatus),
             readonly=readonly,
+            code_version=collect_versions(
+                project.root,
+                service_version=project.project.service_version,
+                service_source=project.project.service_version_source),
             command=" ".join(sys.argv),
         ),
         executions=executions,

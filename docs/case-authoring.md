@@ -184,6 +184,24 @@ expect(payload["page"]).equal_to(1, basis=req("REQ-1", confirmed=True),
   只跑了两个，该 TC 显示「部分验证」——实例证据是分开存的，缺一个就是缺证据。
   若计划只要求任一实例（`instance_policy: any`），在 plan.yaml 里写明
 
+### 参数的证据是怎么存的
+
+你不需要做任何事：`@pytest.mark.parametrize` 的参数会被**完整**写进
+`attachments/<AUTO>/<实例>/params/params.json`，索引里只放摘要与引用：
+
+```json
+{"id": "case-a", "params_digest": "sha256:…",
+ "params_at": "attachments/AUTO-001/case-a/params/params.json",
+ "params_preview": "{\"threshold\": 0.5, …}", "replayable": true}
+```
+
+三条约束值得知道：
+
+- **采集层不截断**。`params_preview` 只给报告看，证据里是完整对象。
+- 参数里有不可 JSON 化的对象时，`replayable` 变 `false` 并给出原因。
+  想让它可重放，给对象加 `to_evidence()` 方法。
+- 参数是**纯数据**，不要传数据库连接、文件句柄这类东西 —— 它们无法重放。
+
 没有 `plan.yaml` 时，报告显示「覆盖矩阵不可计算」——不会假装完整。
 
 ## 九、跑起来

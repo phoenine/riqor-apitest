@@ -21,6 +21,7 @@ from apitest.evidence.models import (
     ExecutionStatus,
     PreconditionRecord,
 )
+from apitest.evidence.serialize import index_entry, to_evidence
 
 _CURRENT: ContextVar["CaseContext | None"] = ContextVar("apitest_current_case", default=None)
 
@@ -35,6 +36,19 @@ BODY_LIMIT = 20_000
 
 _REDACT_RE = re.compile(r"(\"(?:password|passwd|token|secret|access_token|refresh_token)\"\s*:\s*)\"[^\"]*\"",
                         re.IGNORECASE)
+
+
+#: 展示用预览的长度上限 —— 只影响报告，不影响证据
+PREVIEW_LIMIT = 120
+
+
+def _preview(value: Any) -> str:
+    """给报告看的短字符串。**不用于证据**：证据里存完整值。"""
+    try:
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError):
+        text = repr(value)
+    return text if len(text) <= PREVIEW_LIMIT else text[:PREVIEW_LIMIT] + "…"
 
 
 def redact_headers(headers: dict[str, str] | None) -> dict[str, str]:
@@ -95,6 +109,8 @@ class CaseContext:
 
     assertions: list[AssertionRecord] = field(default_factory=list)
     preconditions: list[PreconditionRecord] = field(default_factory=list)
+    #: 参考计算证据索引 [{ref_id, at, replayable}]
+    refs: list[dict[str, Any]] = field(default_factory=list)
     _counters: dict[str, int] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ 附件
@@ -103,16 +119,44 @@ class CaseContext:
         return f"{prefix}-{self._counters[prefix]:03d}"
 
     def _write_attachment(self, folder: str, item_id: str, payload: Any) -> str:
+        """落盘一份附件，返回**相对于证据目录**的路径。
+
+        不用 ``default=str``：那会把任意对象悄悄变成 repr，报告上看不出
+        「这个值已不可还原」。序列化交给 ``to_evidence``，它把无法忠实
+        转换的值标成 ``replayable=false`` 并说明原因。
+        """
         # 用例 → 实例 → 类别：计数器按实例重置，不隔离就会互相覆盖
         base = self.evidence_dir / "attachments" / self.auto_id
         if self.instance_id:
             base = base / self.instance_id
         directory = base / folder
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / f"{item_id}.json").write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8")
-        return f"attachments/{self.auto_id}/{folder}/{item_id}.json"
+        path = directory / f"{item_id}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+        # 返回**文件**路径且含实例层 —— 否则索引指向别的参数的证据
+        return path.relative_to(self.evidence_dir).as_posix()
+
+    def record_param_instance(self, instance_id: str,
+                              params: dict[str, Any]) -> None:
+        """把参数实例的**完整**值落附件，索引里只放摘要与引用。
+
+        展示用的短字符串（``params_preview``）单独生成 —— 采集层不截断，
+        截断只发生在展示层。
+        """
+        serialized = to_evidence(params)
+        # 先立身份：_write_attachment 靠 instance_id 决定子目录，
+        # 不先设就会把证据写到上一层，跟别的参数混在一起
+        self.param_instance = {"id": instance_id}
+        at = self._write_attachment("params", "params", serialized.payload)
+        self.param_instance = {
+            "id": instance_id,
+            "params_digest": serialized.digest,
+            "params_at": at,
+            "params_preview": _preview(params),
+            "replayable": serialized.replayable,
+            **({"reason": serialized.reason} if serialized.reason else {}),
+        }
 
     def record_request(self, *, method: str, url: str, params: dict | None,
                        json_body: Any, headers: dict[str, str] | None,
@@ -148,14 +192,30 @@ class CaseContext:
 
     def record_ref(self, *, path: str, inputs: dict | None, output: Any,
                    rev: str | None = None) -> str:
+        """记录一次参考计算。
+
+        ``inputs`` / ``output`` **完整**落盘；无法忠实序列化时标
+        ``replayable: false`` 并说明原因，不静默降级成 repr。
+        """
         ref_id = self._next_id("ref")
-        self._write_attachment("refs", ref_id, {
+        serialized_inputs = to_evidence(inputs or {})
+        serialized_output = to_evidence(output)
+        payload = {
             "ref_id": ref_id,
             "path": path,
             "rev": rev,
-            "inputs": inputs,
-            "output": output,
-        })
+            "inputs": serialized_inputs.payload,
+            "output": serialized_output.payload,
+            "replayable": serialized_inputs.replayable and serialized_output.replayable,
+            "inputs_digest": serialized_inputs.digest,
+            "output_digest": serialized_output.digest,
+        }
+        reasons = [r for r in (serialized_inputs.reason, serialized_output.reason) if r]
+        if reasons:
+            payload["reason"] = "；".join(reasons)
+        at = self._write_attachment("refs", ref_id, payload)
+        self.refs.append({"ref_id": ref_id, "at": at,
+                          "replayable": payload["replayable"]})
         return ref_id
 
     # ------------------------------------------------------------------ 结果
@@ -198,6 +258,7 @@ class CaseContext:
             error_type=self.error_type,
             cleanup_error=self.cleanup_error,
             param_instance=self.param_instance,
+            refs=list(self.refs),
             preconditions=list(self.preconditions),
             assertions=list(self.assertions),
         )

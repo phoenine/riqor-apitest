@@ -24,6 +24,8 @@
 | 一致性校验按实例级比较 | `evidence/bundle.py` | `tests/test_riqor_contract.py` |
 | 只读三层（施加/回读/探针） | `dataset/readonly.py` | `tests/test_readonly.py` + 真库验证 |
 | PG 分项凭据组装 | `dataset/__init__.py` | `tests/test_readonly.py` |
+| 证据完整值 + 不可重放标注 | `evidence/serialize.py`、`context.py` | `tests/test_evidence_completeness.py` |
+| 版本信息采集（framework/test_code/service） | `runner/versions.py` | `tests/test_evidence_completeness.py` |
 | HTML 报告三层 + 主题可复制 | `report/` | 同上 |
 | CLI：init / scaffold / verify / run / check / render | `runner/cli.py` | 手工 + 示例 |
 
@@ -51,7 +53,7 @@
 
 ### P3 契约细节
 
-- C3 有损字段的「原始证据引用」尚未实现
+- C3 已实现：serialize.py 显式标注 replayable，索引带算法名摘要
 - 不同条件（环境/版本/数据）的多次执行并列保留，聚合规则未实现
 
 ## 不做

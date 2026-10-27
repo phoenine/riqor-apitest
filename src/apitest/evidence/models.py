@@ -139,8 +139,11 @@ class ExecutionRecord(_Model):
     tp: str | None = None
     intent: str = ""
     nodeid: str = ""
-    #: 参数实例身份 {id, params}，参数化用例靠它区分，避免互相覆盖
+    #: 参数实例身份。非参数化用例为 None；参数化时是索引形式
+    #: {id, params_digest, params_at, params_preview, replayable}
     param_instance: dict[str, Any] | None = None
+    #: 参考计算证据索引 [{ref_id, at, replayable}] —— 值本体在附件里
+    refs: list[dict[str, Any]] = Field(default_factory=list)
     execution_status: ExecutionStatus
     verdict: Verdict | None = None
     duration_s: float = 0.0
