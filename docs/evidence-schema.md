@@ -158,12 +158,36 @@ riqor 侧聚合时：`status=passed` 但 `verdict=invalid` 的实例
 repr 字符串，报告上看不出「这个值已经不可还原」。宁可承认不可重放，
 也不要给一个看起来完整的字符串。
 
+**转换与截断分两步走**：
+
+```text
+_convert(value)          完整转换，不截断，算出 digest
+   ↓
+truncate=False → 写附件（完整值，digest 可从文件重算）
+truncate=True  → 写索引（payload 截断，digest 仍基于完整值）
+```
+
+顺序反过来会出两个问题：两个仅末尾不同的长串得到同一摘要；附件内容
+重算不出索引里的摘要。
+
+**驱动的常见返回类型做无损转换**：`Decimal→str`（保精度，不转 float）、
+`datetime/date→isoformat`、`UUID→str`、`Path→str`。转换可逆，所以
+`replayable` 保持 `true`，但会记进 `coerced` 列表。
+
+CK 的金额是 `Decimal`、PG 的 `numeric`/`timestamp` 同理。不做这一步，
+任何真库查询的样本都会让 `json.dumps` 抛 TypeError —— 用例连查询结果
+都拿不到。
+
 索引写法（不放大对象本体）：
 
 ```json
 {"digest": "sha256:ebc00779…", "replayable": true,
  "at": "attachments/AUTO-005/refs/ref-001.json"}
 ```
+
+**附件必须登记在 manifest 里**（`attachments` 键，含 sha256 与大小），
+并且执行记录里的每个引用都要能被 `verify_bundle()` 解析到。附件承担原始
+证据，不登记等于没校验：删掉、改坏、指错地方都没有人知道。
 
 摘要必须带算法名 —— 裸摘要在两包用不同算法或不同截断长度时无法比较。
 

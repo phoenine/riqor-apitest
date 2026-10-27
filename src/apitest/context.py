@@ -144,7 +144,7 @@ class CaseContext:
         展示用的短字符串（``params_preview``）单独生成 —— 采集层不截断，
         截断只发生在展示层。
         """
-        serialized = to_evidence(params)
+        serialized = to_evidence(params, truncate=False)
         # 先立身份：_write_attachment 靠 instance_id 决定子目录，
         # 不先设就会把证据写到上一层，跟别的参数混在一起
         self.param_instance = {"id": instance_id}
@@ -164,30 +164,42 @@ class CaseContext:
                        response_text: str) -> str:
         """记录一次 HTTP 调用，返回 request_id（断言用它建立关联）。"""
         request_id = self._next_id("req")
+        body = to_evidence(redact_payload(json_body), truncate=False)
         self._write_attachment("requests", request_id, {
             "request_id": request_id,
             "method": method,
             "url": url,
             "params": redact_payload(params or {}),
             "headers": redact_headers(headers),
-            "body": redact_payload(json_body),
+            "body": body.payload,
             "status_code": status_code,
             "elapsed_s": round(elapsed_s, 4),
             "response_body": redact_text(response_text),
+            **({"coerced": body.coerced} if body.coerced else {}),
         })
         return request_id
 
     def record_query(self, *, datasource: str, sql: str, params: dict | None,
                      row_count: int, sample: Any) -> str:
         query_id = self._next_id("qry")
-        self._write_attachment("queries", query_id, {
+        # 驱动返回 Decimal / datetime 是常态（CK 的金额、PG 的 numeric），
+        # 直接交给 json.dumps 会抛 TypeError，用例连结果都拿不到
+        serialized = to_evidence(sample, truncate=False)
+        payload = {
             "query_id": query_id,
             "datasource": datasource,
             "sql": sql,
-            "params": params or {},
+            "params": to_evidence(params or {}, truncate=False).payload,
             "row_count": row_count,
-            "sample": sample,
-        })
+            "sample": serialized.payload,
+            "sample_digest": serialized.digest,
+            "replayable": serialized.replayable,
+        }
+        if serialized.coerced:
+            payload["coerced"] = serialized.coerced
+        if serialized.reason:
+            payload["reason"] = serialized.reason
+        self._write_attachment("queries", query_id, payload)
         return query_id
 
     def record_ref(self, *, path: str, inputs: dict | None, output: Any,
@@ -198,8 +210,8 @@ class CaseContext:
         ``replayable: false`` 并说明原因，不静默降级成 repr。
         """
         ref_id = self._next_id("ref")
-        serialized_inputs = to_evidence(inputs or {})
-        serialized_output = to_evidence(output)
+        serialized_inputs = to_evidence(inputs or {}, truncate=False)
+        serialized_output = to_evidence(output, truncate=False)
         payload = {
             "ref_id": ref_id,
             "path": path,
@@ -213,6 +225,9 @@ class CaseContext:
         reasons = [r for r in (serialized_inputs.reason, serialized_output.reason) if r]
         if reasons:
             payload["reason"] = "；".join(reasons)
+        coerced = serialized_inputs.coerced + serialized_output.coerced
+        if coerced:
+            payload["coerced"] = coerced
         at = self._write_attachment("refs", ref_id, payload)
         self.refs.append({"ref_id": ref_id, "at": at,
                           "replayable": payload["replayable"]})

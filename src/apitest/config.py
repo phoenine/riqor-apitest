@@ -122,6 +122,9 @@ class DatasetConfig(BaseModel):
     readonly: bool = True
     #: 是否使用了数据库侧只读账号。框架无法验证，只能如实记录声明。
     readonly_account: bool = False
+    #: 只读验证不通过时是否拒绝建连。默认拒绝 —— 静默降级成「仅语句检查」
+    #: 是最坏的组合：配置写着只读，实际毫无保障。
+    readonly_strict: bool = True
 
 
 class ReportConfig(BaseModel):

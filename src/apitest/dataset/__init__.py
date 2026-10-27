@@ -220,15 +220,19 @@ def _env(config: DatasetConfig, field: str, default: str) -> str:
     return os.environ.get(getattr(config, field, None) or default, "")
 
 
-def _postgres_dsn(name: str, config: DatasetConfig) -> str:
+def _postgres_connect_args(name: str, config: DatasetConfig) -> dict[str, Any]:
     """两种凭证给法都支持：完整 DSN，或分项环境变量。
 
-    只认 ``PG_DSN`` 会把一半项目的配置挡在门外；分项组装是这个包的
+    **分项时返回关键字参数，不拼 DSN 字符串。** conninfo 里值含空格
+    （``password=test password``）会被解析成多出来的键，密码里有单引号
+    或反斜杠同理 —— 这类密码很常见，拼接必然踩。
+
+    只认 ``PG_DSN`` 会把一半项目的配置挡在门外；分项支持是这个包的
     通用性要求，不是特例。
     """
     explicit = os.environ.get(getattr(config, "dsn_env", None) or "PG_DSN")
     if explicit:
-        return explicit
+        return {"conninfo": explicit}
 
     host = _env(config, "host_env", "PG_HOST")
     if not host:
@@ -236,16 +240,43 @@ def _postgres_dsn(name: str, config: DatasetConfig) -> str:
             f"数据源 {name!r} 需要 PG_DSN，或 PG_HOST/PG_PORT/PG_USERNAME/"
             f"PG_PASSWORD/PG_DATABASE 分项环境变量")
 
-    parts = [
-        f"host={host}",
-        f"port={_env(config, 'port_env', 'PG_PORT') or getattr(config, 'port', 5432)}",
-        f"dbname={_env(config, 'database_env', 'PG_DATABASE') or getattr(config, 'database', 'postgres')}",
-        f"user={_env(config, 'user_env', 'PG_USERNAME')}",
-        f"password={_env(config, 'password_env', 'PG_PASSWORD')}",
-        f"sslmode={_env(config, 'sslmode_env', 'PG_SSLMODE') or 'prefer'}",
-        "connect_timeout=15",
-    ]
-    return " ".join(part for part in parts if not part.endswith("="))
+    args: dict[str, Any] = {
+        "host": host,
+        "port": int(_env(config, "port_env", "PG_PORT") or
+                    getattr(config, "port", 5432) or 5432),
+        "dbname": (_env(config, "database_env", "PG_DATABASE") or
+                   getattr(config, "database", "postgres") or "postgres"),
+        "sslmode": _env(config, "sslmode_env", "PG_SSLMODE") or "prefer",
+        "connect_timeout": 15,
+    }
+    user = _env(config, "user_env", "PG_USERNAME")
+    if user:
+        args["user"] = user
+    password = _env(config, "password_env", "PG_PASSWORD")
+    if password:
+        args["password"] = password
+    return args
+
+
+def _enforce_readonly(name: str, config: DatasetConfig,
+                      report: ReadonlyReport) -> None:
+    """声明了只读但没有任何一层验证通过时，默认拒绝建连。
+
+    静默降级成「只有语句检查」是最坏的组合：配置上写着只读，实际一点
+    保障都没有，而且报告可能没人看。要放宽必须在配置里显式写
+    ``readonly_strict: false``。
+    """
+    if report.verified:
+        return
+    detail = "；".join(report.warnings) or "无可用层"
+    message = (f"数据源 {name!r} 声明了只读，但没有任何一层通过验证：{detail}")
+    if getattr(config, "readonly_strict", True):
+        raise ConfigError(
+            message + "。若确认可仅靠语句检查，请在配置里写 "
+                      "readonly_strict: false（报告仍会标注该风险）")
+    report.layers.append(LayerState(
+        "warning", applied=True, verified=False,
+        evidence="readonly_strict=false：只读降级为保证不足，已按配置继续"))
 
 
 def _account_declared(config: DatasetConfig) -> bool:
@@ -314,18 +345,26 @@ def build_dataset(name: str, config: DatasetConfig, root: Path) -> Dataset:
         )
         dataset = ClickHouseDataset(client, name, readonly=readonly)
         if readonly:
-            dataset._readonly_report = _clickhouse_report(dataset, config, name)
+            report = _clickhouse_report(dataset, config, name)
+            _enforce_readonly(name, config, report)
+            dataset._readonly_report = report
         return dataset
 
     if kind == "postgres":
         _require("psycopg", "postgres")
         import psycopg
 
-        dsn = _postgres_dsn(name, config)
-        conn = psycopg.connect(dsn, autocommit=True)
+        connect_args = _postgres_connect_args(name, config)
+        conn = psycopg.connect(**connect_args, autocommit=True)
         dataset = PostgresDataset(conn, name, readonly=readonly)
         if readonly:
-            dataset._readonly_report = _postgres_report(dataset, conn, config, name)
+            report = _postgres_report(dataset, conn, config, name)
+            try:
+                _enforce_readonly(name, config, report)
+            except ConfigError:
+                conn.close()          # 建连失败要归还连接，别泄漏
+                raise
+            dataset._readonly_report = report
         return dataset
 
     raise ConfigError(

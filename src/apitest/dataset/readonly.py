@@ -79,9 +79,9 @@ class ReadonlyReport:
             if layer.layer == "account":
                 continue
             if layer.applied and layer.verified is False:
-                notes.append(f"{layer.layer} 层已施加但**回读确认未生效**")
+                notes.append(f"{layer.layer} 层已施加但**确认未生效**")
             elif layer.applied and layer.verified is None:
-                notes.append(f"{layer.layer} 层已施加但未验证")
+                notes.append(f"{layer.layer} 层已施加但未验证（探针未给出结论）")
 
         if not self.verified:
             notes.append("没有任何一层通过验证 —— 只读保障没有实证")
@@ -136,20 +136,61 @@ def _clickhouse_session(settings_echo: dict[str, Any]) -> LayerState:
                       evidence=f"system.settings {detail}{note}")
 
 
+#: 明确的「写被数据库拒绝」信号。**只有**命中这些才支持 verified=True。
+_DENIAL_MARKERS = (
+    "read-only transaction", "read only transaction",
+    "readonly", "read_only", "is_readonly",
+    "code: 164", "cannot execute create",
+    "insufficientprivilege", "insufficient privilege",
+    "permission denied", "access denied", "not enough privileges",
+)
+
+#: 说明「根本没测到」的信号。连接、超时、语法错误都在这里 ——
+#: 它们不是「被拒绝」，而是「探针没跑成功」。
+_INCONCLUSIVE_MARKERS = (
+    "timeout", "timed out", "connection", "connect refused", "network",
+    "unreachable", "dns", "syntax", "syntaxerror", "indeterminate",
+    "database is locked", "too many connections",
+)
+
+
+def _classify_probe_failure(exc: BaseException) -> tuple[bool | None, str]:
+    """把探针异常分成「确实被拒」和「没测到」。
+
+    把超时、语法错误当成「写入被拒」是危险的假绿：探针其实一条语句都
+    没成功发出，却被记成只读生效。
+    """
+    name = type(exc).__name__
+    text = str(exc).strip().splitlines()[0][:120] if str(exc).strip() else ""
+    blob = f"{name} {text}".lower()
+
+    if any(marker in blob for marker in _INCONCLUSIVE_MARKERS):
+        return None, (f"探针未成功执行（{name}）：{text} —— "
+                      f"不能据此判定只读生效")
+    if any(marker in blob for marker in _DENIAL_MARKERS):
+        return True, f"写入被拒（{name}）：{text}"
+    return None, (f"异常与只读检查无关（{name}）：{text} —— "
+                  f"不能据此判定只读生效")
+
+
 def verify_write_blocked(run_probe: Any, *, kind: str = "postgres") -> LayerState:
     """实测一次写，期望被拒绝。
 
     ``run_probe`` 是不经过语句检查、直接打底层连接的 callable。
     成功写入说明只读**没有**生效 —— 这比回读设置更硬：设置可能写在
     一个不影响后续事务的作用域里（PG 的那个坑正是如此）。
+
+    但「抛了异常」不等于「被拒绝」：超时、语法错误同样会抛。
+    ``verified=None`` 表示这次探针没有给出可用结论。
     """
     sql = _PROBE_SQL_CK if kind == "clickhouse" else _PROBE_SQL
     try:
         run_probe(sql)
     except Exception as exc:                          # noqa: BLE001
-        return LayerState("statement", applied=True, verified=True,
-                          evidence=f"探针写入被拒（{type(exc).__name__}）："
-                                   f"{str(exc).strip().splitlines()[0][:120]}")
+        verified, evidence = _classify_probe_failure(exc)
+        return LayerState("statement", applied=True, verified=verified,
+                          evidence=evidence)
+
     # 写成功了 —— 清理掉探针表再说结论
     try:
         run_probe("DROP TABLE IF EXISTS _apitest_ro_probe")

@@ -109,7 +109,43 @@ conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
 这说明：**旧实现是假只读**，而且检测器能抓到它。如果只做回读不做实测，
 这个坑不会被发现（回读和探针都指向同一份设置，但只有探针会真的写一次）。
 
-## 六、报告怎么表达
+## 六、两条防线：严格模式与探针分类
+
+### 声明了只读但没验证通过 → 拒绝建连
+
+静默降级成「只有语句检查」是最坏的组合：配置写着 `readonly: true`，
+实际一点保障都没有。默认 `readonly_strict: true`，验证不通过就抛
+`ConfigError` 并关掉刚建的连接。
+
+要放宽必须显式写：
+
+```yaml
+datasets:
+  warehouse:
+    readonly: true
+    readonly_strict: false    # 明知只读降级，仍要继续
+```
+
+放宽时报告会多一条 `warning` 层，写明 `readonly_strict=false：只读降级为
+保证不足，已按配置继续` —— 降级可以，但必须留痕。
+
+### 探针抛异常 ≠ 写入被拒
+
+早期实现里 `except Exception` 一律记 `verified=true`。注入超时和语法错误
+后两者都得到「只读已验证」——探针其实一条语句都没成功发出。
+
+现在按异常内容分类：
+
+| 信号 | 结论 |
+|---|---|
+| `read-only transaction` / `readonly` / `code: 164` / `cannot execute create` | `verified=true` |
+| `permission denied` / `insufficient privilege` | `verified=true`（写被挡住，原因不同） |
+| `timeout` / `connection` / `syntax` / 无关异常 | `verified=None`（未给出结论） |
+
+`None` 与 `False` 严格区分：前者是「没测到」，后者是「测到了，没生效」。
+两者在报告里都不显示成通过。
+
+## 七、报告怎么表达
 
 报告里的「数据源只读保障」逐层展示：
 
@@ -128,7 +164,7 @@ conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
 **账户层永远显示 `?` 未验证** —— 框架无权声称它生效，那是 DBA 的事。
 把它显示成绿色的勾才是说谎。
 
-## 七、配置
+## 八、配置
 
 ```yaml
 datasets:
@@ -146,7 +182,7 @@ PostgreSQL 凭据支持两种给法：完整 `PG_DSN`，或
 `PG_HOST`/`PG_PORT`/`PG_DATABASE`/`PG_USERNAME`/`PG_PASSWORD`/`PG_SSLMODE`
 分项。只认 DSN 会把一半项目的配置挡在门外。
 
-## 八、仍未做
+## 九、仍未做
 
 - 账户层无法验证，只能声明。要让报告写上「账户层已验证」，需要在项目侧
   提供一个只读账号并用一条已知会失败的写探针去测它 —— 那是项目配置的责任，

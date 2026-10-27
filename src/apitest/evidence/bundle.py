@@ -282,6 +282,52 @@ def check_consistency(document: EvidenceDocument,
 
 
 # ---------------------------------------------------------------- 主入口
+def _collect_attachments(evidence_dir: Path) -> dict[str, dict[str, Any]]:
+    """attachments/ 下每个文件 → {sha256, size}。
+
+    这些文件承载原始证据（参数完整值、查询样本、参考计算），不登记就
+    等于没校验 —— 删掉或改坏都没人知道。
+    """
+    root = evidence_dir / "attachments"
+    if not root.is_dir():
+        return {}
+    found: dict[str, dict[str, Any]] = {}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(evidence_dir).as_posix()
+        found[relative] = {"sha256": _sha256(path), "size": path.stat().st_size}
+    return found
+
+
+def _collect_references(document: EvidenceDocument) -> list[dict[str, Any]]:
+    """执行记录里所有指向附件的引用。
+
+    索引写了一个路径，那条路径就必须存在 —— 报告里的链接正指向它。
+    """
+    refs: list[dict[str, Any]] = []
+    for record in document.executions:
+        instance = ""
+        if record.param_instance:
+            instance = str(record.param_instance.get("id", ""))
+            at = record.param_instance.get("params_at")
+            if at:
+                refs.append({
+                    "auto_id": record.auto_id, "instance": instance,
+                    "kind": "params", "at": at,
+                    "digest": record.param_instance.get("params_digest", ""),
+                })
+        for item in record.refs or []:
+            at = item.get("at")
+            if at:
+                refs.append({
+                    "auto_id": record.auto_id, "instance": instance,
+                    "kind": "ref", "at": at,
+                    "digest": item.get("digest", ""),
+                })
+    return refs
+
+
 def write_bundle(document: EvidenceDocument, evidence_dir: Path,
                  extra_files: dict[str, str] | None = None) -> Path:
     """写出完整证据包，返回 manifest 路径。"""
@@ -308,6 +354,10 @@ def write_bundle(document: EvidenceDocument, evidence_dir: Path,
     consistency = check_consistency(document, junit_instances, inventory["cases"])
     consistency["junit_testcase_count"] = len(junit_instances)
 
+    # 附件承担原始证据，必须登记校验和；引用清单让 verify 能查「指向的东西在不在」
+    attachments = _collect_attachments(evidence_dir)
+    references = _collect_references(document)
+
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "execution_id": document.meta.execution_id,
@@ -326,6 +376,8 @@ def write_bundle(document: EvidenceDocument, evidence_dir: Path,
         "basis_coverage": document.basis_coverage(),
         "consistency": consistency,
         "files": {},
+        "attachments": attachments,
+        "references": references,
     }
 
     # 只登记标准文件：executions.jsonl 是中间产物，attachments 按需读，
@@ -385,6 +437,8 @@ def verify_bundle(evidence_dir: Path) -> list[str]:
     if manifest.get("consistency", {}).get("execution_vs_junit") != "ok":
         problems.append("manifest 未记录成功的一致性结论")
 
+    problems.extend(_verify_attachments(evidence_dir, manifest))
+
     execution = evidence_dir / "execution.json"
     if execution.is_file():
         try:
@@ -410,6 +464,41 @@ def verify_bundle(evidence_dir: Path) -> list[str]:
             if expected != junit_instances:
                 problems.append(
                     "junit.xml 与 execution.json 的实例集合或状态不一致")
+
+    return problems
+
+
+def _verify_attachments(evidence_dir: Path, manifest: dict[str, Any]) -> list[str]:
+    """附件存在性、校验和、可读性，以及引用指向是否成立。"""
+    problems: list[str] = []
+    registered = manifest.get("attachments") or {}
+    if not isinstance(registered, dict):
+        return ["manifest.attachments 结构非法"]
+
+    for name, info in registered.items():
+        path = evidence_dir / name
+        if not path.is_file():
+            problems.append(f"附件缺失：{name}")
+            continue
+        expected = (info or {}).get("sha256")
+        if expected and _sha256(path) != expected:
+            problems.append(f"附件内容与记录不一致：{name}")
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            problems.append(f"附件不是合法 JSON：{name}（{exc}）")
+
+    # 引用的每个路径都必须落在已登记的附件里
+    for ref in manifest.get("references") or []:
+        at = ref.get("at")
+        if not at:
+            continue
+        if at not in registered:
+            problems.append(
+                f"引用指向未登记的附件：{ref.get('auto_id')} "
+                f"{ref.get('kind')} → {at}")
+        elif not (evidence_dir / at).is_file():
+            problems.append(f"引用指向的文件不存在：{at}")
 
     return problems
 

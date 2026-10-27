@@ -26,6 +26,9 @@
 | PG 分项凭据组装 | `dataset/__init__.py` | `tests/test_readonly.py` |
 | 证据完整值 + 不可重放标注 | `evidence/serialize.py`、`context.py` | `tests/test_evidence_completeness.py` |
 | 版本信息采集（framework/test_code/service） | `runner/versions.py` | `tests/test_evidence_completeness.py` |
+| 查询样本无损转换（Decimal/datetime） | `evidence/serialize.py` | `tests/test_boundaries.py` |
+| 只读严格模式 + 探针异常分类 | `dataset/readonly.py`、`__init__.py` | `tests/test_boundaries.py` |
+| 附件登记与引用校验 | `evidence/bundle.py` | `tests/test_boundaries.py` |
 | HTML 报告三层 + 主题可复制 | `report/` | 同上 |
 | CLI：init / scaffold / verify / run / check / render | `runner/cli.py` | 手工 + 示例 |
 
