@@ -31,7 +31,7 @@
 | 附件登记与引用校验 | `evidence/bundle.py` | `tests/test_boundaries.py` |
 | 数据条件元数据 + 可比性判定 | `evidence/compare.py`、`config.py` | `tests/test_comparability.py` |
 | pytest 生命周期（skip / teardown / 收集登记） | `runner/pytest_plugin.py` | `tests/test_lifecycle.py` |
-| 凭据脱敏（自定义认证位置） | `context.py`、`pytest_plugin.py` | `tests/test_lifecycle.py` |
+| 脱敏（精确名单 + 作用域隔离） | `context.py`、`client.py` | `tests/test_lifecycle.py` |
 | 证据校验接入消费入口 | `runner/cli.py`、`evidence/bundle.py` | `tests/test_lifecycle.py` |
 | 运行目录唯一化与拒绝复用 | `runner/pytest_plugin.py` | `tests/test_lifecycle.py` |
 | 缺失记录按结局分类（infra / not_run / 未选中） | `runner/pytest_plugin.py` | `tests/test_lifecycle.py` |

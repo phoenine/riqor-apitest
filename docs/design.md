@@ -394,20 +394,27 @@ apitest init / scaffold / verify / run / check / render
 `check` 的定位、边界与产物见 1.6：`unsupported` 不等于用例无效，
 `survived` 不是盲点计数，两者都不影响验证结论。
 
-### 5.x 脱敏：按配置登记，不靠固定名单
+### 5.x 脱敏：精确名单，按作用域生效
 
-凭据可能出现在五个位置：请求头、查询参数、请求体、响应体、附件。固定名单
-只能覆盖前两者里最常见的那几个 —— 而配置允许 `key_header: X-Custom-Key`
-这种任意命名。
+这是本地调试工具，**误掩和漏掩一样有害** —— 前者直接毁掉排查证据。
 
-做法：
+三条边界：
 
-- 认证配置里声明的头名与参数名，**运行时登记**为敏感
-- `headers` 里值写成 `${VAR}` 的，同样按凭据处理
-- 字段名正则兜底（含 `api_key` / `access_key`，**不含裸 `key`**，
-  避免误伤 `sort_key` / `primary_key`）
-- 响应体同样过正则：`{"api_key": "..."}` 不能因为出现在 response 里就放行
-- 直接构造 `APIClient`（不走插件）时也要登记
+- **只认精确名字**。固定名单（`Authorization` / `Cookie` / `X-Api-Key` 等）
+  加上本项目认证配置里声明的 `key_header` / `key_query`。不做
+  `pass|auth|token` 这类片段匹配 —— 那会把 `passed` / `pass_rate` /
+  `author` / `token_count` 一起掩掉，而这些恰恰是查问题要看的
+- **按用例上下文生效**。`Redactor` 是实例，挂在 `CaseContext` 上。
+  早期用进程级全局集合，一个客户端把 `code` 配成认证参数，别的客户端
+  普通的 `code: 200` 也被掩掉
+- **不从环境变量推断**。`headers` 里值写成 `${VAR}` 不代表它是秘密，
+  `X-Tenant-ID: ${TENANT_ID}` 是常见写法，按凭据处理就是误伤
+
+请求体、响应体以保留调试信息为主，只掩码**精确**的凭据键
+（`{"password": "..."}`），不做通用推断。响应体照旧按上限截断。
+
+`Redactor` 由 `APIClient.request()` 在每次请求时登记（幂等）—— 不在
+构造时登记，因为 session 级 fixture 建立时 function 级的用例上下文还没就位。
 
 ### 5.x 跨运行比较：只判定，不归并
 

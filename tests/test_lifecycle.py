@@ -15,8 +15,7 @@ import pytest
 
 from apitest.context import (
     CaseContext,
-    is_sensitive_field,
-    is_sensitive_header,
+    Redactor,
     redact_headers,
     redact_payload,
 )
@@ -170,37 +169,88 @@ def test_t(api, broken):
 
 
 # ================================================================ 脱敏
-def test_custom_auth_header_is_registered():
-    """配置允许随便起头名，固定名单列不全。"""
-    from apitest.context import register_sensitive
+def test_business_fields_are_not_masked():
+    """排查问题最需要看的字段不能被误伤。
 
-    register_sensitive(headers=["X-Custom-Key"], fields=["api_key"])
-    assert is_sensitive_header("X-Custom-Key")
-    assert is_sensitive_field("api_key")
+    早期版本用 ``pass|auth|token`` 做正则搜索，这些全被掩了。
+    """
+    sample = {"passed": True, "pass_rate": 0.95, "author": "Alice",
+              "token_count": 128, "auth_mode": "none", "status": "ok"}
+    assert Redactor().payload(sample) == sample
 
 
-def test_api_key_query_param_is_masked():
-    """查询参数走 redact_payload，键名不在固定名单里也必须掩码。"""
-    masked = redact_payload({"api_key": "secret-value", "page": 1})
+def test_known_credential_fields_are_masked():
+    masked = Redactor().payload({"password": "p", "api_key": "k",
+                                 "access_token": "t", "page": 1})
+    assert masked["password"] == "***"
     assert masked["api_key"] == "***"
+    assert masked["access_token"] == "***"
     assert masked["page"] == 1
 
 
-def test_nested_secret_fields_are_masked():
-    masked = redact_payload({"outer": {"access_token": "abc", "name": "x"}})
-    assert masked["outer"]["access_token"] == "***"
+def test_nested_credential_fields_are_masked():
+    masked = Redactor().payload({"outer": {"refresh_token": "abc", "name": "x"}})
+    assert masked["outer"]["refresh_token"] == "***"
     assert masked["outer"]["name"] == "x"
 
 
-def test_bearer_header_is_masked():
-    assert redact_headers({"Authorization": "Bearer abc"})["Authorization"] == "***"
+def test_standard_auth_headers_are_masked():
+    masked = Redactor().headers({"Authorization": "Bearer abc",
+                                 "X-Tenant-ID": "tenant-42"})
+    assert masked["Authorization"] == "***"
+    assert masked["X-Tenant-ID"] == "tenant-42", "普通业务头不该被掩"
 
 
-def test_plain_field_names_survive():
-    """别把 sort_key / primary_key 一起掩掉。"""
-    masked = redact_payload({"sort_key": "name", "primary_key": "id"})
-    assert masked["sort_key"] == "name"
-    assert masked["primary_key"] == "id"
+def test_configured_auth_header_is_masked():
+    """配置里声明的凭据位置要认，但只在这个 Redactor 实例里。"""
+    class _Auth:
+        key_header = "X-Custom-Key"
+        key_query = "api_key"
+
+    redactor = Redactor()
+    redactor.add_auth(_Auth())
+
+    assert redactor.headers({"X-Custom-Key": "v"})["X-Custom-Key"] == "***"
+    assert redactor.payload({"api_key": "v"})["api_key"] == "***"
+
+
+def test_redactor_does_not_leak_across_instances():
+    """一个客户端的注册不能污染另一个。
+
+    全局注册表下，把 ``code`` 配成认证参数后，别的客户端普通的
+    ``code: 200`` 也会被掩掉。
+    """
+    class _CodeAuth:
+        key_header = None
+        key_query = "code"
+
+    mine = Redactor()
+    mine.add_auth(_CodeAuth())
+    theirs = Redactor()
+
+    assert mine.payload({"code": 200})["code"] == "***"
+    assert theirs.payload({"code": 200})["code"] == 200, "不该跨实例生效"
+
+
+def test_env_var_header_is_not_assumed_secret():
+    """值来自 ${VAR} 不等于凭据 —— X-Tenant-ID 也常这样配置。"""
+    redactor = Redactor()
+    assert redactor.headers({"X-Tenant-ID": "tenant-42"})["X-Tenant-ID"] == "tenant-42"
+
+
+def test_response_body_keeps_debug_fields():
+    """响应体以保留排查信息为主，只掩码精确的凭据键。"""
+    body = '{"token_count": 128, "passed": true, "token": "abc", "author": "Alice"}'
+    masked = Redactor().text(body)
+    assert '"token_count": 128' in masked
+    assert '"passed": true' in masked
+    assert '"author": "Alice"' in masked
+    assert '"token": "***"' in masked
+
+
+def test_default_helpers_use_the_same_rules():
+    assert redact_headers({"Authorization": "x"})["Authorization"] == "***"
+    assert redact_payload({"api_key": "x"})["api_key"] == "***"
 
 
 def test_custom_credential_never_reaches_evidence(tmp_path):
@@ -218,7 +268,7 @@ environments:
       key_query: api_key
 """
     os.environ["FAKE_SECRET_XYZ"] = "super-secret-value"
-    root = _project('''\
+    root = _project("""\
 import httpx
 import pytest
 
@@ -227,10 +277,11 @@ from apitest import APIClient, case, expect, req
 
 @pytest.fixture(scope="session")
 def api(apitest_environment):
-    """真发一次请求：MockTransport 让请求完整走一遍，但不碰网络。"""
+    # 真发一次请求：MockTransport 让请求完整走一遍，但不碰网络
     def handler(request):
         return httpx.Response(
-            200, json={"api_key": "super-secret-value", "data": [1, 2]})
+            200, json={"api_key": "super-secret-value", "data": [1, 2],
+                       "token_count": 128, "passed": True})
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     api_client = APIClient(apitest_environment, client=client)
@@ -242,7 +293,7 @@ def api(apitest_environment):
 def test_cred(api):
     api.get("/x", params={"api_key": "super-secret-value"})
     expect(1).equal_to(1, basis=req("REQ-1", confirmed=True))
-''', config=config)
+""", config=config)
     evidence = tmp_path / "ev"
     _run(root, evidence)
 
@@ -256,9 +307,11 @@ def test_cred(api):
     payload = json.loads(requests[0].read_text())
     assert payload["headers"].get("X-Custom-Key") == "***", "自定义认证头没掩码"
     assert payload["params"].get("api_key") == "***", "查询参数没掩码"
-    assert payload["response_body"], "响应体应当被记录"
-    assert "super-secret-value" not in payload["response_body"], \
-        "响应 JSON 里的凭据也要掩码"
+    assert "super-secret-value" not in payload["response_body"]
+    # 排查信息要留住（httpx 序列化紧凑，不留空格）
+    body = payload["response_body"]
+    assert '"token_count":128' in body
+    assert '"passed":true' in body
 
 
 # ================================================================ 参数集合

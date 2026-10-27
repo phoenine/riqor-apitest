@@ -25,56 +25,110 @@ from apitest.evidence.serialize import index_entry, to_evidence
 
 _CURRENT: ContextVar["CaseContext | None"] = ContextVar("apitest_current_case", default=None)
 
-#: 这些头的值一律掩码，避免凭据进证据
-SENSITIVE_HEADERS = {
-    "authorization", "cookie", "set-cookie", "x-api-key", "x-auth-token",
-    "proxy-authorization", "token",
-}
+#: 标准认证头 —— 只认这些名字，不做模糊匹配
+SENSITIVE_HEADERS = frozenset({
+    "authorization", "proxy-authorization", "cookie", "set-cookie",
+    "x-api-key", "x-auth-token", "token",
+})
 
-#: 字段名命中这些词的一律掩码。不用裸 ``key`` —— 会误伤 sort_key/primary_key。
-_SENSITIVE_FIELD_RE = re.compile(
-    r"(pass(word|wd)?|secret|token|auth|cookie|credential|"
-    r"api[-_]?key|access[-_]?key|private[-_]?key|session[-_]?id)", re.IGNORECASE)
-
-#: 运行时注册的敏感位置，由认证配置填充。
-#: 固定名单覆盖不到 ``auth.key_header: X-Custom-Key`` 这类自定义位置 ——
-#: 而配置允许用户随便起名，名单永远列不全。
-_registered_headers: set[str] = set()
-_registered_fields: set[str] = set()
-
-
-def register_sensitive(*, headers: Any = (), fields: Any = ()) -> None:
-    """登记本项目实际使用的敏感头名与参数名。
-
-    由插件在环境解析后调用。名字来自配置，不是猜出来的。
-    """
-    _registered_headers.update(str(h).lower() for h in headers if h)
-    _registered_fields.update(str(f).lower() for f in fields if f)
-
-
-def is_sensitive_field(name: str) -> bool:
-    lowered = str(name).lower()
-    if lowered in _registered_fields:
-        return True
-    return bool(_SENSITIVE_FIELD_RE.search(lowered))
-
-
-def is_sensitive_header(name: str) -> bool:
-    lowered = str(name).lower()
-    return lowered in SENSITIVE_HEADERS or lowered in _registered_headers
+#: 明确的凭据字段名，**精确匹配**（小写后相等）。
+#: 不用正则搜索 —— 那会把 passed / pass_rate / author / token_count
+#: 这类排查问题最需要看的字段一起掩掉。
+SENSITIVE_FIELDS = frozenset({
+    "password", "passwd", "pwd",
+    "token", "access_token", "refresh_token", "id_token",
+    "secret", "client_secret",
+    "api_key", "apikey", "access_key", "secret_key", "private_key",
+})
 
 #: 响应体单条截断上限（字符）
 BODY_LIMIT = 20_000
 
-_REDACT_RE = re.compile(
-    r"(\"(?:password|passwd|token|secret|access_token|refresh_token|"
-    r"api[-_]?key|access[-_]?key|private[-_]?key|client[-_]?secret)\"\s*:\s*)"
-    r"\"[^\"]*\"",
+#: 展示用预览的长度上限 —— 只影响报告，不影响证据
+PREVIEW_LIMIT = 120
+
+
+class Redactor:
+    """按作用域生效的脱敏器。
+
+    只认**精确名字**：固定名单 + 本项目认证配置里明确声明的位置。
+    不猜、不从环境变量推断、不跨客户端共享。
+
+    早期版本用正则匹配 ``pass|auth|token`` 这类片段，还把注册表做成进程级
+    全局集合 —— 前者把 ``passed``/``pass_rate``/``author``/``token_count``
+    全掩了，后者让一个客户端配的 ``code`` 污染其他客户端。两者都在破坏
+    调试证据，而这是本地调试工具最主要的用途。
+    """
+
+    def __init__(self, headers: Any = (), fields: Any = ()) -> None:
+        self._headers = set(SENSITIVE_HEADERS)
+        self._fields = set(SENSITIVE_FIELDS)
+        self._headers.update(str(h).lower() for h in headers if h)
+        self._fields.update(str(f).lower() for f in fields if f)
+
+    def add_auth(self, auth: Any) -> None:
+        """登记认证配置里声明的凭据位置。名字来自配置，不是猜的。"""
+        if auth is None:
+            return
+        for name in (getattr(auth, "key_header", None),
+                     getattr(auth, "token_header", None)):
+            if name:
+                self._headers.add(str(name).lower())
+        for name in (getattr(auth, "key_query", None),):
+            if name:
+                self._fields.add(str(name).lower())
+
+    def is_header(self, name: str) -> bool:
+        return str(name).lower() in self._headers
+
+    def is_field(self, name: str) -> bool:
+        return str(name).lower() in self._fields
+
+    # ------------------------------------------------------------------
+    def headers(self, headers: dict[str, str] | None) -> dict[str, str]:
+        return {key: ("***" if self.is_header(key) else value)
+                for key, value in (headers or {}).items()}
+
+    def payload(self, value: Any) -> Any:
+        if isinstance(value, str):
+            return self.text(value)
+        if isinstance(value, dict):
+            return {key: ("***" if self.is_field(key) else self.payload(item))
+                    for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self.payload(item) for item in value]
+        return value
+
+    def text(self, text: str) -> str:
+        """响应体：按上限截断，只掩码**精确**的凭据键。
+
+        响应体主要用于排查，优先保留信息。只认
+        ``{"password": "..."}`` 这种明确写法，不做模糊猜测。
+        """
+        masked = _REDACT_JSON_RE.sub(r'\1"***"', text)
+        if len(masked) > BODY_LIMIT:
+            return masked[:BODY_LIMIT] + f"\n…[截断，原长 {len(masked)}]"
+        return masked
+
+
+#: JSON 键**完全等于**凭据名才替换。``"token_count"`` 不匹配 ``"token"``。
+_REDACT_JSON_RE = re.compile(
+    r'("(?:' + "|".join(sorted(
+        re.escape(name) for name in SENSITIVE_FIELDS)) + r')"\s*:\s*)"[^"]*"',
     re.IGNORECASE)
 
 
-#: 展示用预览的长度上限 —— 只影响报告，不影响证据
-PREVIEW_LIMIT = 120
+def redact_headers(headers: dict[str, str] | None) -> dict[str, str]:
+    """默认规则下的头脱敏。用例上下文里请用 ``ctx.redactor``。"""
+    return Redactor().headers(headers)
+
+
+def redact_text(text: str) -> str:
+    return Redactor().text(text)
+
+
+def redact_payload(value: Any) -> Any:
+    return Redactor().payload(value)
 
 
 def _preview(value: Any) -> str:
@@ -84,39 +138,6 @@ def _preview(value: Any) -> str:
     except (TypeError, ValueError):
         text = repr(value)
     return text if len(text) <= PREVIEW_LIMIT else text[:PREVIEW_LIMIT] + "…"
-
-
-def redact_headers(headers: dict[str, str] | None) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for key, value in (headers or {}).items():
-        out[key] = "***" if is_sensitive_header(key) else value
-    return out
-
-
-def redact_text(text: str) -> str:
-    """按字段名掩码常见凭据字段，再按上限截断。"""
-    masked = _REDACT_RE.sub(r'\1"***"', text)
-    if len(masked) > BODY_LIMIT:
-        return masked[:BODY_LIMIT] + f"\n…[截断，原长 {len(masked)}]"
-    return masked
-
-
-def redact_payload(value: Any) -> Any:
-    """递归掩码：先按字段名，再按文本里的凭据片段。
-
-    只做文本正则是不够的 —— ``{"api_key": "xxx"}`` 的键名不在任何固定
-    名单里，值就会原样落盘。查询参数走的就是这条路径。
-    """
-    if isinstance(value, str):
-        return redact_text(value)
-    if isinstance(value, dict):
-        out: dict[str, Any] = {}
-        for key, item in value.items():
-            out[key] = "***" if is_sensitive_field(key) else redact_payload(item)
-        return out
-    if isinstance(value, (list, tuple)):
-        return [redact_payload(item) for item in value]
-    return value
 
 
 def current_context() -> "CaseContext | None":
@@ -141,6 +162,9 @@ class CaseContext:
     cleanup_error: str | None = None
     #: 参数化实例身份 {id, params}；非参数化用例为 None
     param_instance: dict[str, Any] | None = None
+    #: 本条用例的脱敏规则。按上下文生效，不跨客户端共享 ——
+    #: 全局注册表会让一个客户端配的 ``code`` 把别人的普通字段也掩掉。
+    redactor: Redactor = field(default_factory=Redactor)
 
     @property
     def instance_id(self) -> str | None:
@@ -214,17 +238,17 @@ class CaseContext:
                        response_text: str) -> str:
         """记录一次 HTTP 调用，返回 request_id（断言用它建立关联）。"""
         request_id = self._next_id("req")
-        body = to_evidence(redact_payload(json_body), truncate=False)
+        body = to_evidence(self.redactor.payload(json_body), truncate=False)
         self._write_attachment("requests", request_id, {
             "request_id": request_id,
             "method": method,
             "url": url,
-            "params": redact_payload(params or {}),
-            "headers": redact_headers(headers),
+            "params": self.redactor.payload(params or {}),
+            "headers": self.redactor.headers(headers),
             "body": body.payload,
             "status_code": status_code,
             "elapsed_s": round(elapsed_s, 4),
-            "response_body": redact_text(response_text),
+            "response_body": self.redactor.text(response_text),
             **({"coerced": body.coerced} if body.coerced else {}),
         })
         return request_id

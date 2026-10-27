@@ -29,7 +29,6 @@ from apitest.context import (
     bind,
     flush,
     load_executions,
-    register_sensitive,
     unbind,
 )
 from apitest.case import CaseMeta
@@ -158,29 +157,12 @@ def apitest_config(request: pytest.FixtureRequest) -> ProjectConfig:
     return config
 
 
-def _register_auth_secrets(environment: EnvironmentConfig) -> None:
-    """把认证配置里声明的位置登记为敏感。
-
-    固定名单列不全 ``key_header: X-Custom-Key`` 这种自定义位置，而这个包的
-    配置本来允许用户随便起名 —— 名单永远追不上配置。
-    """
-    auth = getattr(environment, "auth", None)
-    if auth is None:
-        return
-    headers = [name for name in (getattr(auth, "key_header", None),
-                                 getattr(auth, "header", None)) if name]
-    fields = [name for name in (getattr(auth, "key_query", None),) if name]
-    register_sensitive(headers=headers, fields=fields)
-
-
 @pytest.fixture(scope="session")
 def apitest_environment(apitest_config: ProjectConfig,
                         request: pytest.FixtureRequest) -> EnvironmentConfig:
     env_name = apitest_config.environment_name(request.config.getoption("apitest_env"))
     request.config.stash[_ENV_KEY] = env_name
-    environment = apitest_config.environments[env_name]
-    _register_auth_secrets(environment)
-    return environment
+    return apitest_config.environments[env_name]
 
 
 @pytest.fixture(scope="session")

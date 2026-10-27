@@ -45,21 +45,6 @@ class RecordedResponse:
                 f"{self.elapsed_s:.3f}s {self.request_id}>")
 
 
-def _register_env_secrets(env: "EnvironmentConfig") -> None:
-    """把环境里声明的认证位置登记为敏感。"""
-    from apitest.context import register_sensitive
-
-    auth = getattr(env, "auth", None)
-    headers = [name for name in (getattr(auth, "key_header", None),) if name]
-    # headers 里值写成 ${VAR} 的，等于把凭据放进请求头 —— 一样要掩码
-    for key, raw in (getattr(env, "headers", None) or {}).items():
-        if isinstance(raw, str) and raw.startswith("${"):
-            headers.append(key)
-    fields = [name for name in (getattr(auth, "key_query", None),) if name]
-    if headers or fields:
-        register_sensitive(headers=headers, fields=fields)
-
-
 class APIClient:
     """按环境配置发请求，并把每次调用写进当前用例的证据。"""
 
@@ -68,9 +53,8 @@ class APIClient:
         self._env = env
         self._base_url = env.base_url.rstrip("/")
         self._default_headers = env.resolved_headers()
-        # 直接构造客户端（不走 pytest 插件）时也要登记敏感位置，
-        # 否则 auth 头会明文落进请求附件
-        _register_env_secrets(env)
+        # 不在 __init__ 里注册：session 级 fixture 建立时，function 级的
+        # 用例上下文还没就位，那时 current_context() 是 None，凭据位置就丢了。
         self._auth = auth or build_auth(env.auth, verify_tls=env.verify_tls)
         self._client = client or httpx.Client(
             timeout=env.timeout_s, verify=env.verify_tls, trust_env=False,
@@ -81,6 +65,16 @@ class APIClient:
     def request(self, method: str, path: str, *, params: dict | None = None,
                 json: Any = None, data: Any = None,
                 headers: dict[str, str] | None = None) -> RecordedResponse:
+        # 把认证配置声明的凭据位置登记到**当前用例**的脱敏器上（幂等）。
+        # 不写全局：那会让这台客户端配的字段名污染其他客户端。
+        # 也不从 headers 的 ${VAR} 推断 —— X-Tenant-ID 这类普通业务头
+        # 同样取自环境变量，推断会把它们一起掩掉。
+        from apitest.context import current_context
+
+        ctx = current_context()
+        if ctx is not None:
+            ctx.redactor.add_auth(getattr(self._env, "auth", None))
+
         url = self._build_url(path)
         merged_headers = {**self._default_headers, **(headers or {}), **self._auth.headers()}
         merged_params = {**(params or {}), **self._auth.params()}
