@@ -204,8 +204,20 @@ def test_no_assertions_is_invalid_not_pass():
     assert _record(verdict_assertions=[]).verdict is Verdict.INVALID
 
 
-def test_verdict_invalid_when_assertion_survived():
-    record = _record(verdict_assertions=[_assertion(verified=True, check="survived")])
+def test_verdict_unaffected_by_negative_control_outcome():
+    """负对照结果（killed/survived）是事实观察，不参与结论归约。
+
+    过宽的断言同样能杀掉负对照，所以 survived 既不能证明断言有效，
+    也不能证明它无效。
+    """
+    for outcome in ("survived", "killed", "unsupported"):
+        record = _record(verdict_assertions=[_assertion(verified=True, check=outcome)])
+        assert record.verdict is Verdict.PASS, outcome
+
+
+def test_verdict_invalid_on_replay_mismatch():
+    """唯一该降级的情况：重放与原记录矛盾，证据不可信。"""
+    record = _record(verdict_assertions=[_assertion(verified=True, check="replay_mismatch")])
     assert record.verdict is Verdict.INVALID
 
 

@@ -58,8 +58,14 @@ all_in / none_in              集合约束
 is_status                     HTTP 状态码
 ```
 
-断言的缺陷检测能力由**负对照**衡量（改坏被测代码，断言是否报警），
-不由比较器的强弱衡量。
+断言的缺陷检测能力**既不由比较器强弱衡量，也不由负对照证明**：
+
+- 用比较器种类判断是错的 —— 需求若确实要求「数量大于零」，`greater_than(0)`
+  就是完整有效的断言。
+- 用负对照证明同样是错的 —— 见 1.6：`greater_than(0)` 能杀掉「值为 0」的
+  负对照，同时也放过后端恒返回 1 的错误。
+
+「期望值对不对」只能由依据（1.5）与独立参考计算回答。
 
 ### 1.5 依据：五个独立维度
 
@@ -71,16 +77,19 @@ is_status                     HTTP 状态码
 | 2 | 引用可定位 | 引用能否解析到具体条目，**必须是明确的 True** | 框架自动（`ref` 试导入、`schema` 试解析、`req` 随 confirmed 一起声明） |
 | 3 | 依据已确认 | 该来源确实支持这个期望 | **人 / Agent 显式确认**，不可自动推导 |
 | 4 | 执行结果 | `passed` / `failed` / `error` / `skipped` / `not_reached` | 框架 |
-| 5 | 负对照结果 | `killed` / `survived` / `unsupported` / `error` / `not_run` | 离线检查 |
+| 5 | 重放自检结果 | `killed` / `survived` / `unsupported` / `replay_mismatch` / `not_run` | 离线检查（**不参与结论归约**，见 1.6） |
 
 由此派生三个不同强度的结论，报告必须分开统计：
 
 ```text
 已验证            1∈{req,schema,ref} ∧ 2（locatable is True）∧ 3 ∧ 4=passed
-已证实且抗变异      上述 ∧ 5=killed
 仅声明来源         1∈{req,schema,ref} 但 3 未确认   → 不算已验证
 仅观察             1∈{measured,observed,none}       → 不算已验证
 ```
+
+**没有「已证实且抗变异」这一档。** 维度 5 的 `killed` 只说明比较器对
+某一个具体变异敏感，不说明这条断言能挡住真实的业务错误 —— 把两者合成
+一个更高的强度等级，等于用一个检查工具的结论给期望值背书。
 
 **为什么维度 3 不能自动推导**：框架能检查 `REQ-003` 这个编号是否存在，
 但无法判断「REQ-003 讲的是否就是加权均值口径」。把这件事自动化，
@@ -93,6 +102,97 @@ expect(x).equal_to(8.809, basis=req("REQ-003", confirmed=True))
 ```
 
 默认不确认是刻意的 —— 忘写就是「未确认」，不会静默变成已验证。
+
+### 1.6 负对照：定位与边界
+
+**它是「比较器与证据重放自检」，不是断言有效性评估。**
+
+早期把它设计成「已证实且抗变异」的一档强度，是错的。反例：
+
+| 输入 | `greater_than(0)` 的结果 |
+|---|---|
+| 后端恒返回 1 | 通过 |
+| 负对照改成 0 | 拒绝 → `killed` |
+| 业务上错误的正数 999 | 仍然通过 |
+
+这条过宽的断言轻松拿到 `killed`，同时对真实缺陷完全免疫。所以
+
+- `killed` 只证明「比较器拒绝了这一个变异」；
+- `survived` 只是「本次有效负对照未被拒绝」的次数，**不是业务盲点计数**；
+  断言过宽会 `killed`，变异构造不当也会 `survived`。
+
+它能回答与不能回答的问题：
+
+| 能回答 | 不能回答 |
+|---|---|
+| 比较器实现有没有写反（`gt` 当 `ge` 用） | 期望值符不符合业务 |
+| 证据里容差、类型、序列化信息有没有丢 | 断言够不够严 |
+| 离线重放结果与原执行是否一致 | 后端算法是否正确 |
+| 自定义比较器是否可用 | 覆盖率够不够 |
+
+#### 一致性与负对照是两件事
+
+自检对每条断言做两次重放，**分别记录、分别判定**：
+
+```text
+正对照   用原始 actual 重放
+         original=passed  replay=passed   → consistent
+         original=failed  replay=failed   → consistent   ← 产品失败，一切正常
+         original=passed  replay=failed   → replay_mismatch
+         original=failed  replay=passed   → replay_mismatch
+
+负对照   用构造的变异 actual 重放
+         replay=failed  → killed
+         replay=passed  → survived
+         构造不出     → unsupported
+```
+
+**原本失败的断言，重放仍然失败不是异常** —— 那是它应有的表现。
+只有正对照出现「原记录说通过、重放却失败」（或反向）才记
+`replay_mismatch`，含义是证据或比较器与当时的执行不一致。
+
+#### 只有 replay_mismatch 影响结论
+
+`survived` 与 `killed` 都是事实观察，**不参与 `derive_verdict` 归约**：
+拿一个可能来自构造不当的信号去否决可靠的执行事实，只会制造假红。
+`replay_mismatch` 是唯一例外 —— 证据自相矛盾时，这条断言的结论不可信。
+即便如此，它也排在 `FAILED` 之后：业务失败是事实，不能被「证据可疑」洗成
+「不可信」。
+
+#### 构造器范围（先做确定的）
+
+| 先做 | 留 `unsupported` |
+|---|---|
+| `equal_to` / `not_equal` 同类型 ±1 | `matches` 正则反例不唯一 |
+| `greater_than` / `less_than` 系列取边界值本身 | `contains` 空串与片段语义歧义 |
+| `close_to` 容差外一点 | `all_in` / `none_in` 集合外元素可能是非法输入 |
+| `is_status` 200↔500 | `is_empty` 缺「非空但有意义」的通用反例 |
+| `has_length` n±1 | |
+
+内置纯函数的边界行为（`gt(0)` 拒绝 0、接受 1）放**框架单元测试**更确定，
+不依赖证据包重放。
+
+#### 产物独立，不改原始证据
+
+自检结果写 `assertion-checks.json`，与 `execution.json` 并列：
+
+```text
+assertion-checks.json
+  execution: {path, sha256, execution_id}   ← 绑定被分析的那份证据
+  comparator_version: "1.0.0"               ← 比较器改了，旧结论不沿用
+  checks[]: {auto_id, instance, assertion_id, kind,
+             original_result, control, mutant, replay_result, outcome}
+```
+
+**不得写回 `execution.json`**：那会破坏 `manifest.json` 记录的 sha256，
+让 `verify_bundle()` 报「内容已被改动」；也混淆了「原始执行事实」与
+「事后分析结论」。
+
+#### 不进覆盖矩阵
+
+覆盖矩阵只看执行结果与依据。自检结论若参与矩阵，一次构造器 bug 就会让
+一批 TC 显示「未验证」——把工具问题伪装成测试缺口。
+
 
 ## 二、分层与目录
 
@@ -291,7 +391,8 @@ apitest init / scaffold / verify / run / check / render
 静态校验**不得**要求所有环境、所有未使用数据源的凭据都已存在 ——
 否则在 CI 里预先检查就成了不可能完成的任务。
 
-`unsupported`（该比较器暂不支持负对照）**不等于用例无效**。
+`check` 的定位、边界与产物见 1.6：`unsupported` 不等于用例无效，
+`survived` 不是盲点计数，两者都不影响验证结论。
 
 ## 六、报告
 
@@ -428,7 +529,7 @@ react-flow 只用于关系展示（追溯图、影响面），不替代表格与
 | 角色 | 问题 | 合格线 |
 |---|---|---|
 | Agent | 写一条新用例要读几份文档 | 一个页面（`case-authoring.md`）能写出通过 `verify` 的用例 |
-| Agent | 写错能否被发现 | `check` 判出 `survived` 或「依据未确认」 |
+| Agent | 写错能否被发现 | `verify` 判出身份/字段问题；`check` 判出依据未确认；**`survived` 不承担这个职责**（见 1.6） |
 | 用户 | 不读代码能否回答「验了什么」 | 覆盖矩阵逐 TC 给出七态结论 |
 | 用户 | 不读代码能否回答「哪里没验」 | 未实现 / 未执行 / 部分验证分别可见 |
 | 用户 | 能否看出「通过」是否可信 | 三个强度的结论分开计数 |

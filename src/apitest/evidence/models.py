@@ -32,12 +32,25 @@ class Verdict(str, Enum):
 
 
 class Check(str, Enum):
-    """离线正负对照结果。"""
+    """离线重放自检结果。
 
+    **定位：比较器与证据重放自检。** 它能发现比较器实现错误、证据里
+    容差/类型/序列化信息丢失、离线重放与原执行不一致；它**不判断期望值
+    是否符合业务** —— 一条过宽的断言（如 ``greater_than(0)``）同样能
+    杀掉它的负对照，同时也放过后端恒返回 1 的错误。
+
+    因此除 ``REPLAY_MISMATCH`` 外，此处的结果都是**事实观察**，
+    不用于否决验证结论。
+    """
+
+    #: 负对照被拒绝 —— 比较器对这个变异敏感
     KILLED = "killed"
+    #: 负对照未被拒绝 —— 只记录，不据此降级结论
     SURVIVED = "survived"
+    #: 构造不出有意义的反例（正则、空串包含、复杂集合等）
     UNSUPPORTED = "unsupported"
-    ERROR = "error"
+    #: 重放结果与原记录矛盾 —— 证据不可信，这才是唯一的降级理由
+    REPLAY_MISMATCH = "replay_mismatch"
     NOT_RUN = "not_run"
 
 
@@ -161,6 +174,11 @@ class ExecutionRecord(_Model):
 
         第 3、4 步的顺序尤其重要：一条用例既失败了、前提又不成立时，
         事实是「失败」，不是「无法验证」——后者会把缺陷洗掉。
+
+        ``check=survived`` **不参与归约**。负对照存活可能来自断言过宽，
+        也可能来自变异构造不当，框架区分不了；拿它推翻结论等于用不可靠
+        的判断否决可靠的执行事实。只有 ``replay_mismatch``（重放与原始
+        记录自相矛盾）才说明证据本身不可信。
         """
         if self.execution_status in {
             ExecutionStatus.SKIPPED,
@@ -182,7 +200,8 @@ class ExecutionRecord(_Model):
         if self.execution_status is ExecutionStatus.BLOCKED:
             return None
 
-        if any(a.check is Check.SURVIVED for a in self.assertions):
+        # 证据自相矛盾比「前提不成立」更根本，排在其前
+        if any(a.check is Check.REPLAY_MISMATCH for a in self.assertions):
             return Verdict.INVALID
         # 没有断言 = 没验证任何东西。原生 assert 不产生断言记录，
         # 不能因为 pytest 报 passed 就给它一个「有依据的验证通过」。

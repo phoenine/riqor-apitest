@@ -29,9 +29,18 @@
 
 ## 未完成（按优先级）
 
-### P2 断言有效性
+### P2 比较器与证据重放自检（低优先级）
 
-- `check` 的正负对照（killed/survived），当前只做静态检查
+`check` 的离线重放：正对照验一致性、负对照验比较器敏感度。
+**定位是工具自检，不评估断言业务有效性**（见设计 1.6）。
+
+- 先做确定性构造器：`equal_to` / `not_equal` / 边界系列 / `close_to` / `is_status`
+- 正则、空串包含、复杂集合留 `unsupported`
+- 产物写独立的 `assertion-checks.json`，**不改** `execution.json`
+- `survived` 不改 verdict；只有 `replay_mismatch` 才降级
+- 不进覆盖矩阵
+
+内置比较器的边界行为已在 `tests/test_framework.py` 覆盖，不依赖此功能。
 
 ### P2 只读三层
 

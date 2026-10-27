@@ -101,12 +101,45 @@ def test_unexecuted_states_have_no_verdict():
         assert _record(status=status).verdict is None
 
 
-def test_survived_assertion_makes_verdict_invalid():
+def test_survived_does_not_change_verdict():
+    """负对照存活只是事实观察，不否决结论。
+
+    过宽的断言（gt(0)）同样能杀掉负对照 —— survived 既不能证明断言
+    有效，也不能证明它无效。用它推翻结论等于让一个不可靠的判断
+    否决可靠的执行事实。
+    """
     from apitest.evidence.models import Check
 
     assertion = _assertion()
     assertion.check = Check.SURVIVED
+    assert _record(assertions=[assertion]).verdict is Verdict.PASS
+
+
+def test_killed_does_not_change_verdict():
+    from apitest.evidence.models import Check
+
+    assertion = _assertion()
+    assertion.check = Check.KILLED
+    assert _record(assertions=[assertion]).verdict is Verdict.PASS
+
+
+def test_replay_mismatch_makes_verdict_invalid():
+    """唯一该降级的情况：重放与原记录自相矛盾，证据不可信。"""
+    from apitest.evidence.models import Check
+
+    assertion = _assertion()
+    assertion.check = Check.REPLAY_MISMATCH
     assert _record(assertions=[assertion]).verdict is Verdict.INVALID
+
+
+def test_replay_mismatch_does_not_mask_real_failure():
+    """业务失败仍然报 fail —— 重放异常不能把缺陷洗成「不可信」。"""
+    from apitest.evidence.models import Check
+
+    assertion = _assertion(passed=False, result="failed")
+    assertion.check = Check.REPLAY_MISMATCH
+    record = _record(status=ExecutionStatus.FAILED, assertions=[assertion])
+    assert record.verdict is Verdict.FAIL
 
 
 def test_no_assertions_is_invalid():
