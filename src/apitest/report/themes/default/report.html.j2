@@ -46,8 +46,8 @@
        white-space: nowrap; }
   /* 需求覆盖表：状态标记和用例编号被挤成两行就看不清了，给足最小宽度，
      让说明列去占剩余空间（它本来就能换行）。 */
-  .matrix th.col-tc, .matrix td.col-tc { min-width: 320px; }
-  .matrix th.col-state, .matrix td.col-state,
+  .matrix th.col-tc, .matrix td.col-tc { min-width: 170px; }
+  .matrix th.col-name, .matrix td.col-name { min-width: 340px; }
   .matrix th.col-verdict, .matrix td.col-verdict { min-width: 108px; }
   .matrix th.col-auto, .matrix td.col-auto { min-width: 148px; }
   .matrix th.col-note, .matrix td.col-note { width: 100%; }
@@ -73,6 +73,7 @@
   .mark-unknown { color: var(--muted); }
   .assert-intent { color: var(--fg); font-family: inherit; font-size: 12px; margin-top: 2px; }
   .assert-source { color: var(--muted); font-size: 11px; margin-top: 1px; }
+  .verdict-state { margin-top: 3px; font-size: 11px; color: var(--muted); }
   .uncovered { margin-top: 4px; font-size: 12px; color: var(--muted); line-height: 1.55; }
   .uncovered-tag { display: block; font-weight: 600; color: var(--fg); margin-bottom: 2px; }
   .uncovered code { background: var(--soft); padding: 0 4px; border-radius: 3px; }
@@ -220,25 +221,29 @@
   <table class="matrix">
     <thead>
       <tr>
-        <th class="col-tc">测试用例</th>
-        <th class="col-state">覆盖状态</th>
+        <th class="col-auto">自动化用例 ID</th>
+        <th class="col-tc">用例标识</th>
+        <th class="col-name">用例名称</th>
         <th class="col-verdict">验证结论</th>
-        <th class="col-auto">自动化用例</th>
-        <th class="col-note">说明</th>
+        <th class="col-note">备注</th>
       </tr>
     </thead>
     <tbody>
       {% for row in matrix.rows %}
       <tr>
-        <td class="mono col-tc">{{ row.tc }}{% if row.title %}<div class="muted">{{ row.title }}</div>{% endif %}</td>
-        <td class="col-state"><span class="state {{ row.state }}">{{ row.state_label }}</span></td>
+        <td class="mono col-auto">
+          {% for auto_id in row.execution_ids %}{{ auto_id }}{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">—</span>{% endfor %}
+        </td>
+        <td class="mono col-tc">{{ row.tc }}</td>
+        <td class="col-name">{{ row.title }}</td>
         <td class="col-verdict">
           {% if row.verdict %}
           <span class="tag {{ row.verdict }}">{{ row.verdict_label }}</span>
           {% else %}<span class="tag none">无结论</span>{% endif %}
-        </td>
-        <td class="mono col-auto">
-          {% for auto_id in row.execution_ids %}{{ auto_id }}{% if not loop.last %}, {% endif %}{% else %}—{% endfor %}
+          {# 覆盖状态不单独占列，但「部分验证」不能看起来像完全通过 #}
+          {% if row.state != 'verified' %}
+          <div class="verdict-state">{{ row.state_label }}</div>
+          {% endif %}
         </td>
         <td class="col-note">
           {{ row.note }}
@@ -249,10 +254,7 @@
             <div><code>{{ item.id }}</code>{% if item.text %} {{ item.text }}{% endif %}{% if not item.id_explicit %} <span class="tag observed">ID 非显式</span>{% endif %}</div>
             {% endfor %}
             {% if row.waived %}
-            <div class="uncovered-why">
-              {{ row.waived.reason }}
-              {% if row.waived.impact %}<br>影响：{{ row.waived.impact }}{% endif %}
-            </div>
+            <div class="uncovered-why">{{ row.waived.reason }}{% if row.waived.impact %} {{ row.waived.impact }}{% endif %}</div>
             {% endif %}
           </div>
           {% endif %}
