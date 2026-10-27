@@ -14,13 +14,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-BasisKind = Literal["req", "schema", "ref", "defect", "measured", "observed"]
+BasisKind = Literal["req", "schema", "ref", "derived", "defect", "measured",
+                    "observed"]
 
 #: 可以支撑「已验证」的来源类别（仍需 confirmed）
 #:
 #: ``defect`` 是「已确认的缺陷修复约定」（如禅道 bug 单裁定的正确行为）——
 #: 它不是需求，但同样是「这个期望为什么对」的书面根据。
-VERIFIED_KINDS: frozenset[str] = frozenset({"req", "schema", "ref", "defect"})
+#:
+#: ``derived`` 是「我按这条计算式算出这个数」：计算式 + 数据前提 + 具体数值。
+#: 需求不会告诉你「今天的斜率是 -0.1071691596」，契约也不规定数值 —— 这类期望
+#: 的唯一合法来源是独立验算。以前它只能写成 measured，而日期字符串不算身份，
+#: 于是验算型断言被判「依据未证实」，这是把合法来源挡在门外。
+VERIFIED_KINDS: frozenset[str] = frozenset(
+    {"req", "schema", "ref", "derived", "defect"})
 
 
 @dataclass(frozen=True)
@@ -161,6 +168,28 @@ def _is_importable(path: str) -> bool:
     except Exception:                                # noqa: BLE001 - 解析失败即不可定位
         return False
     return True
+
+
+def derived(expression: str, *, conditions: dict[str, Any] | None = None,
+            rev: str | None = None, confirmed: bool = False,
+            locatable: bool | None = None) -> Basis:
+    """验算依据：计算式 + 数据前提 + 具体数值。
+
+    用于「需求与契约都不给数，期望值由独立验算得出」的断言 —— 例如趋势斜率
+    （最小二乘）、Tukey 栅栏内的条数与均值。这类期望的正确性只能由独立参考
+    保证，不能由书面条文保证，所以它需要自己的来源类别，而不是塞进 measured。
+
+    ``expression`` 写计算式（怎么算出来的），``conditions`` 写数据前提
+    （哪台资产、哪个动作、哪个窗口、多少个有效点）。两者缺一即判不可定位 ——
+    只写「验算过」而不写算式与前提，等于又一次「我某天看了一眼」。
+
+    与 ``ref`` 的分工：``ref`` 指向可导入的函数，能重跑；``derived`` 用于
+    算式就写在用例里、不值得单独抽函数的场合。两者都可支撑「已验证」。
+    """
+    inferred = bool((expression or "").strip()) and conditions is not None
+    return Basis(kind="derived", ref=expression, rev=rev, inputs=conditions,
+                 confirmed=confirmed,
+                 locatable=locatable if locatable is not None else inferred)
 
 
 def measured(on: str, *, baseline: str = "", service_version: str = "",

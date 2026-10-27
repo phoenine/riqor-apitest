@@ -135,13 +135,14 @@ def test_natural_language_required_ids_are_flagged_unstable():
     assert case.required_assertions[0].id_explicit is False
 
 
-def test_unconfirmed_when_basis_not_confirmed():
-    """承担 RA 的断言依据未确认 → 该 TC 未达到已验证。"""
+def test_basis_debt_is_reported_but_does_not_downgrade_coverage():
+    """承担 RA 的断言依据未确认 → 覆盖状态不变，另记 basis_debt。"""
     document = _doc([_exec("TC-1", assertions=[_assertion(confirmed=False, covers=["RA-01"])])])
     row = build_matrix(document, _plan(PlannedCase(id="TC-1")))["rows"][0]
 
-    assert row["state"] == "unconfirmed"
-    assert "依据未确认" in row["note"]
+    assert row["state"] == "verified", "验收点被覆盖到了就是覆盖到了"
+    assert row["basis_grade"] == "requirement", "来源类别是需求，只是没确认"
+    assert row["basis_debt"], "依据债必须留痕，否则就再也看不见"
 
 
 def test_auxiliary_assertion_does_not_downgrade():

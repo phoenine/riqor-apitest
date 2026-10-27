@@ -287,9 +287,9 @@ def test_verdict_pass_and_fail_are_recorded_independently_of_status(tmp_path):
     unconfirmed.verdict = unconfirmed.derive_verdict()
 
     assert unconfirmed.execution_status is ExecutionStatus.PASSED
-    # 依据不足 ≠ 证据不可信。曾在两者都归 INVALID 时把「还没补依据」
-    # 说成「结论有毒」，掩盖了真正需要修的是依据而不是证据。
-    assert unconfirmed.verdict is Verdict.UNCONFIRMED
+    # 依据不足不参与结论：断言过、证据自洽就是 pass；依据债走资产门。
+    assert unconfirmed.verdict is Verdict.PASS
+    assert unconfirmed.assertions[0].verified is False, "依据债仍要留痕"
 
     document.executions.append(unconfirmed)
     bundle = tmp_path / "extra"
@@ -298,4 +298,4 @@ def test_verdict_pass_and_fail_are_recorded_independently_of_status(tmp_path):
     loaded = json.loads((bundle / "execution.json").read_text(encoding="utf-8"))
     row = next(e for e in loaded["executions"] if e["auto_id"] == "AUTO-009")
     assert row["execution_status"] == "passed"
-    assert row["verdict"] == "unconfirmed"
+    assert row["verdict"] == "pass"

@@ -143,8 +143,9 @@ class CoverageState(str, Enum):
     NOT_RUN = "not_run"                   # 有用例，本次没跑
     INCONCLUSIVE = "inconclusive"         # 跑了，但前提不成立，得不出结论
     PARTIAL = "partial"                   # 跑了，但必需验证点没覆盖全
-    UNCONFIRMED = "unconfirmed"           # 覆盖了，但关键依据未确认
-    VERIFIED = "verified"                 # 必需验证全部完成且依据已确认
+    UNCONFIRMED = "unconfirmed"           # 遗留：旧证据里「依据未确认」的覆盖状态
+    INVALID = "invalid"                   # 覆盖了，但结论不可采信（清理失败 / 前提检查炸了）
+    VERIFIED = "verified"                 # 必需验证点全部被断言覆盖（依据另有等级，见 basis_view）
 
 
 class RegressionState(str, Enum):
@@ -186,8 +187,59 @@ STATE_LABELS = {
     "inconclusive": "无法验证",
     "partial": "部分验证",
     "unconfirmed": "未确认依据",
+    "invalid": "结论不可信",
     "verified": "已验证",
 }
+
+
+#: 依据等级：这个断言「凭什么算对」——与「产品对不对」正交，单独一栏。
+BASIS_LABELS = {
+    "requirement": "需求 / 缺陷约定",
+    "contract": "接口契约",
+    "computed": "验算数值",
+    "baseline": "已采纳基线",
+    "weak": "无身份实测",
+    "none": "未声明来源",
+}
+
+#: 从强到弱。一个 TC 有多条断言时取**最弱**那条（木桶效应）。
+_BASIS_ORDER = ["requirement", "contract", "computed", "baseline", "weak", "none"]
+
+
+def _basis_grade_of(assertion) -> str:
+    """单条断言的依据等级；只看承担验收点（covers）的断言。"""
+    kind = assertion.basis.kind
+    if kind in {"req", "defect"}:
+        return "requirement"
+    if kind == "schema":
+        return "contract"
+    if kind in {"ref", "derived"}:
+        return "computed"
+    if kind == "measured":
+        return "baseline" if assertion.basis.regression_ready else "weak"
+    return "none"
+
+
+def basis_view(record_list) -> tuple[str | None, list[str]]:
+    """一条 TC 的依据等级（最弱）+ 待补断言清单。
+
+    **不参与通过判定**：依据是「期望有没有出处」，结论是「产品对不对」。
+    把它塞进结论，等于用例资产的质量问题被读成产品大面积不通过。
+    """
+    grades: list[str] = []
+    debt: list[str] = []
+    for record in record_list:
+        for assertion in record.assertions:
+            if not assertion.covers:
+                continue
+            grade = _basis_grade_of(assertion)
+            grades.append(grade)
+            if not assertion.basis.verified:
+                debt.append(f"{record.auto_id}/{assertion.id}")
+    if not grades:
+        return None, []
+    weakest = max(grades, key=_BASIS_ORDER.index)
+    return weakest, debt
 
 #: 覆盖状态从弱到强 —— 一个 TC 有多条用例时取最弱
 _STATE_ORDER = [
@@ -196,6 +248,7 @@ _STATE_ORDER = [
     CoverageState.INCONCLUSIVE,
     CoverageState.PARTIAL,
     CoverageState.UNCONFIRMED,
+    CoverageState.INVALID,
     CoverageState.VERIFIED,
 ]
 
@@ -386,24 +439,10 @@ def _evaluate_case(case: PlannedCase,
             "note": "必需验证点未全部覆盖",
         }
 
-    # 依据有效性只看 basis —— a.verified 还要求断言 passed，
-    # 用它判断会把「断言失败」误报成「依据未确认」。
-    #
-    # **只看承担 RA 的断言**：不标 covers 的断言是辅助证据（旁证、快照），
-    # 它们依据不足不代表验收点没验到。把辅助断言也算进来，一个快照就能
-    # 把整条 TC 从「已验证」拉下来。
-    unconfirmed = [
-        f"{r.auto_id}/{a.id}" for r in record_list for a in r.assertions
-        if not a.basis.verified and a.covers
-    ]
-    if unconfirmed:
-        return {
-            "tc": case.id, "title": case.title,
-            "state": CoverageState.UNCONFIRMED.value, "verdict": verdict,
-            "executions": record_list, "uncovered": [],
-            "waived": case.waived.model_dump() if case.waived else None,
-            "note": f"关键断言依据未确认：{', '.join(unconfirmed[:5])}",
-        }
+    # 依据强弱**不再降覆盖状态**：验收点被断言覆盖到了就是覆盖到了，
+    # 「这些期望够不够硬」由 basis_grade / basis_debt 单列（build_matrix 里挂），
+    # 并由 `apitest check --fail-on-findings` 当资产门失败。以前把它做成
+    # 覆盖状态 unconfirmed，报告读起来就是「这批 TC 没验证」。
 
     if verdict == "invalid":
         # 结论不可信：清理失败、依据不可定位、前提检查本身出错。
@@ -411,7 +450,7 @@ def _evaluate_case(case: PlannedCase,
         # 不能落到 verified —— 那是「验过了，通过」的意思。
         return {
             "tc": case.id, "title": case.title,
-            "state": CoverageState.UNCONFIRMED.value, "verdict": verdict,
+            "state": CoverageState.INVALID.value, "verdict": verdict,
             "executions": record_list,
             "uncovered": _uncovered(case, record_list),
             "waived": case.waived.model_dump() if case.waived else None,
@@ -447,6 +486,13 @@ def build_matrix(document: EvidenceDocument,
     rows = [evaluate_case(case, _executions_for_tc(document, case.id))
             for case in plan.test_cases]
 
+    # 依据等级单独挂在行上：覆盖状态说「验没验到」，依据说「凭什么算对」。
+    for row in rows:
+        grade, debt = basis_view(row["executions"])
+        row["basis_grade"] = grade
+        row["basis_label"] = BASIS_LABELS.get(grade, "") if grade else ""
+        row["basis_debt"] = debt
+
     summary: dict[str, int] = {state.value: 0 for state in CoverageState}
     regression_summary: dict[str, int] = {}
     for row in rows:
@@ -476,6 +522,6 @@ def build_matrix(document: EvidenceDocument,
 
 __all__ = [
     "Plan", "PlannedCase", "Waiver", "PlanError",
-    "CoverageState", "STATE_LABELS",
+    "CoverageState", "STATE_LABELS", "BASIS_LABELS", "basis_view",
     "load_plan", "evaluate_case", "build_matrix",
 ]

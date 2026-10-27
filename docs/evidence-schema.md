@@ -96,7 +96,22 @@ verdict   = 已执行部分是否支持「验证通过」
 ```
 
 riqor 侧聚合时：`status=passed` 但 `verdict=invalid` 的实例
-**不得计入已验证**，应单独统计为「通过但依据不足」。
+**不得计入已验证**。
+
+**依据强弱不进 verdict**（2026-10-27 裁定）。三条轴各自记账：
+
+```text
+verdict      产品对不对          pass / fail / inconclusive / invalid
+basis_grade  期望凭什么算对       requirement / contract / computed / baseline / weak / none
+check        asset 质量门        apitest check --fail-on-findings 失败即红
+```
+
+理由：需求不会告诉你「今天的斜率是 -0.1071691596」，契约也不规定数值 ——
+验算得出的具体数值是这类期望的**唯一**合法来源。把它折成「依据不足 →
+不通过」会让写得好好的用例报出 13.83% 通过率（实测），即用例资产的欠账
+被读成产品大面积不通过。依据债仍然全程留痕：计划的每条 TC 带
+`basis_grade` 与 `basis_debt`，报告单列「断言的依据来源」，资产门逐条列出
+待补断言与 `gt 0` 类弱断言。
 
 ## 四、可执行契约（必须由测试保证）
 

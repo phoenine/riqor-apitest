@@ -75,7 +75,8 @@ class BasisRecord(_Model):
     「这条断言跑得怎样」，不描述「期望从哪来」。
     """
 
-    kind: Literal["req", "schema", "ref", "defect", "measured", "observed"]
+    kind: Literal["req", "schema", "ref", "derived", "defect", "measured",
+                  "observed"]
     ref: str = ""
     rev: str | None = None
     inputs: dict[str, Any] | None = None
@@ -102,14 +103,14 @@ class BasisRecord(_Model):
 
         只看 ``kind`` 是不够的 —— 声称了来源不等于来源支持这个期望。
         """
-        return (self.kind in {"req", "schema", "ref", "defect"}
+        return (self.kind in {"req", "schema", "ref", "derived", "defect"}
                 and self.confirmed
                 and self.locatable is True)
 
     @property
     def declared_only(self) -> bool:
         """声称了来源但未确认。"""
-        return self.kind in {"req", "schema", "ref", "defect"} and not self.confirmed
+        return self.kind in {"req", "schema", "ref", "derived", "defect"} and not self.confirmed
 
 
 class AssertionRecord(_Model):
@@ -247,11 +248,16 @@ class ExecutionRecord(_Model):
             return Verdict.INVALID
         if any(a.result != "passed" for a in self.assertions):
             return Verdict.INVALID
-        # 断言都过了，但期望没有可采信来源 —— 这不是「证据不可信」，
-        # 是「还不足以下结论」。两者在报告里必须分开显示。
-        if any(not a.verified for a in self.assertions):
-            return Verdict.UNCONFIRMED
-
+        # 断言通过、证据自洽 → 结论就是通过。
+        #
+        # **依据强弱不再参与结论**：那是用例资产的质量（期望有没有出处），
+        # 与「被测行为对不对」正交。以前这里把「依据未证实」降成 unconfirmed，
+        # 结果是 88 条绿的用例报出 13.83% 通过率 —— 用例写得不够好被读成产品
+        # 大面积不通过，报告把成本转嫁给了错误的人。
+        #
+        # 依据债不消失，只是换了记账位置：计划的每条 TC 带 basis_grade 与
+        # basis_debt（见 plan.py），`apitest check --fail-on-findings` 作为
+        # 资产门失败，报告摘要单列依据分布。发现问题靠资产门，不靠污染结论。
         return Verdict.PASS
 
     def attribution(self) -> str | None:

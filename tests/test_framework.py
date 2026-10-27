@@ -113,8 +113,9 @@ def test_assertion_records_basis_and_passes(tmp_path):
     assert [a.basis.kind for a in assertions] == ["req", "schema", "measured", "observed"]
     assert [a.verified for a in assertions] == [True, True, False, False]
     assert records[0].execution_status is ExecutionStatus.PASSED
-    # 断言全过，但存在未证实依据 → 结论不可信，不是 pass
-    assert records[0].verdict is Verdict.UNCONFIRMED
+    # 断言全过 → 结论通过。依据强弱是资产质量问题，不进入结论
+    # （见 plan.basis_view：单独一栏 + 资产门）。
+    assert records[0].verdict is Verdict.PASS
 
 
 def test_failed_assertion_raises_and_marks_failed(tmp_path):
@@ -168,9 +169,17 @@ def _assertion(kind="equal_to", verified=True, check="not_run") -> AssertionReco
     )
 
 
-def test_verdict_pass_requires_verified_assertions():
+def test_verdict_ignores_basis_strength():
+    """结论只回答「产品对不对」；依据强弱是另一条轴。
+
+    曾经「依据未证实 → unconfirmed」，结果是 88 条绿的用例报出 13.83%
+    通过率 —— 用例写得不够好被读成产品大面积不通过。
+    """
     assert _record(verdict_assertions=[_assertion(verified=True)]).verdict is Verdict.PASS
-    assert _record(verdict_assertions=[_assertion(verified=False)]).verdict is Verdict.UNCONFIRMED
+    weak = _record(verdict_assertions=[_assertion(verified=False)])
+    assert weak.verdict is Verdict.PASS
+    # 依据债没有被抹掉，只是换了记账位置
+    assert weak.assertions[0].verified is False
 
 
 def test_declared_but_unconfirmed_basis_is_not_verified():
@@ -183,9 +192,9 @@ def test_declared_but_unconfirmed_basis_is_not_verified():
 
     assert unconfirmed.basis.declared_only is True
     assert unconfirmed.verified is False
-    # 依据未确认 ≠ 证据不可信。归 INVALID 会把「还没补依据」说成「结论有毒」，
-    # 掩盖了真正该补的是依据。
-    assert record.verdict is Verdict.UNCONFIRMED
+    # declared_only 是「声称了来源但没确认」：既不进通过，也不判产品错，
+    # 由资产门（apitest check --fail-on-findings）追这条债。
+    assert record.verdict is Verdict.PASS
 
 
 def test_greater_than_zero_can_be_fully_verified():

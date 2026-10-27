@@ -15,7 +15,8 @@
 """
 from __future__ import annotations
 
-from apitest.basis import OBSERVED, Basis, measured, ref, req, schema
+from apitest.basis import (OBSERVED, Basis, defect, derived, measured, ref,
+                           req, schema)
 from apitest.case import CaseMeta, case, meta_of
 from apitest.client import APIClient, RecordedResponse
 from apitest.config import ConfigError, EnvironmentConfig, ProjectConfig, load_config
@@ -43,7 +44,7 @@ __all__ = [
     # 断言
     "expect", "COMPARATORS",
     # 依据
-    "Basis", "req", "schema", "ref", "measured", "OBSERVED",
+    "Basis", "req", "schema", "ref", "derived", "defect", "measured", "OBSERVED",
     # 参考计算
     "compute", "Computed", "ReferenceError", "resolve",
     # 数据前提

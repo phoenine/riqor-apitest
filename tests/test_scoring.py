@@ -217,7 +217,7 @@ def test_p(api):
     row = build_matrix(doc, Plan(test_cases=[PlannedCase(id="TC-11")]))["rows"][0]
     assert row["verdict"] == "invalid"
     assert row["state"] != "not_run", "结论被抹成未执行"
-    assert row["state"] == "unconfirmed", "invalid 不能落进 verified"
+    assert row["state"] == "invalid", "结论不可信要自己一个状态，不能借用依据栏"
 
 
 def test_blocked_with_verdict_is_not_counted_as_missing_instance(tmp_path):
