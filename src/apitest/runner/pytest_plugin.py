@@ -24,7 +24,15 @@ from apitest.config import (
     find_config,
     load_config,
 )
-from apitest.context import case_context, load_executions
+from apitest.context import (
+    CaseContext,
+    bind,
+    flush,
+    load_executions,
+    register_sensitive,
+    unbind,
+)
+from apitest.case import CaseMeta
 from apitest.dataset import Dataset, build_dataset
 from apitest.runner.versions import collect as collect_versions
 from apitest.evidence.models import EvidenceDocument, ExecutionStatus, Meta
@@ -34,6 +42,7 @@ _PROJECT_KEY: "StashKey[ProjectConfig]" = StashKey()
 _ENV_KEY: "StashKey[str]" = StashKey()
 _EVIDENCE_KEY: "StashKey[Path]" = StashKey()
 _DATASETS_KEY: "StashKey[object]" = StashKey()
+_COLLECTED_KEY: "StashKey[list]" = StashKey()
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -46,8 +55,63 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                     help="证据输出目录；默认 outputs/runs/<时间戳>")
 
 
+def pytest_collection_modifyitems(session: pytest.Session,
+                                  config: pytest.Config,
+                                  items: list[pytest.Item]) -> None:
+    """登记所有带 ``@case`` 的用例实例，**在执行之前**。
+
+    ``@pytest.mark.skip`` 在 setup 阶段就跳过，autouse fixture 根本不会跑 ——
+    不在这里登记，这类用例在证据里彻底消失（整包甚至不会生成）。
+    """
+    collected: list[dict[str, Any]] = []
+    for item in items:
+        meta = meta_of(getattr(item, "function", None))
+        if meta is None:
+            continue
+        callspec = getattr(item, "callspec", None)
+        collected.append({
+            "auto_id": meta.auto_id,
+            "tc": meta.tc,
+            "tp": meta.tp,
+            "intent": meta.intent,
+            "nodeid": item.nodeid,
+            "instance_id": str(callspec.id) if callspec is not None else None,
+        })
+    config.stash[_COLLECTED_KEY] = collected
+
+
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "precondition: 声明该用例依赖数据前提")
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """在会话一开始就确定证据目录。
+
+    不能等 ``apitest_evidence_dir`` fixture：``@pytest.mark.skip`` 的用例在
+    setup 阶段就被跳过，autouse fixture 根本不执行，目录和 stash 都不会有 ——
+    整包证据直接消失。
+    """
+    config = session.config
+    explicit = config.getoption("apitest_evidence", None)
+    if explicit:
+        directory = Path(explicit)
+    else:
+        project = config.stash.get(_PROJECT_KEY, None)
+        root = getattr(project, "root", None) or Path.cwd()
+        # 精确到毫秒 + pid：只到秒时并行跑两次会写进同一个目录
+        stamp = time.strftime("%Y%m%dT%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}-{os.getpid()}"
+        directory = Path(root) / "outputs" / "runs" / stamp
+
+    # 复用目录会让 executions.jsonl 追加、两次运行混成一份证据
+    markers = ("executions.jsonl", "execution.json", "manifest.json")
+    reused = [name for name in markers if (directory / name).exists()]
+    if reused:
+        raise pytest.UsageError(
+            f"证据目录 {directory} 里已有运行结果（{', '.join(reused)}）。"
+            f"复用会把两次执行混进同一份证据 —— 请换一个目录或先移走旧结果。")
+
+    directory.mkdir(parents=True, exist_ok=True)
+    config.stash[_EVIDENCE_KEY] = directory
 
 
 # ---------------------------------------------------------------- 配置
@@ -79,17 +143,38 @@ def apitest_config(request: pytest.FixtureRequest) -> ProjectConfig:
     return config
 
 
+def _register_auth_secrets(environment: EnvironmentConfig) -> None:
+    """把认证配置里声明的位置登记为敏感。
+
+    固定名单列不全 ``key_header: X-Custom-Key`` 这种自定义位置，而这个包的
+    配置本来允许用户随便起名 —— 名单永远追不上配置。
+    """
+    auth = getattr(environment, "auth", None)
+    if auth is None:
+        return
+    headers = [name for name in (getattr(auth, "key_header", None),
+                                 getattr(auth, "header", None)) if name]
+    fields = [name for name in (getattr(auth, "key_query", None),) if name]
+    register_sensitive(headers=headers, fields=fields)
+
+
 @pytest.fixture(scope="session")
 def apitest_environment(apitest_config: ProjectConfig,
                         request: pytest.FixtureRequest) -> EnvironmentConfig:
     env_name = apitest_config.environment_name(request.config.getoption("apitest_env"))
     request.config.stash[_ENV_KEY] = env_name
-    return apitest_config.environments[env_name]
+    environment = apitest_config.environments[env_name]
+    _register_auth_secrets(environment)
+    return environment
 
 
 @pytest.fixture(scope="session")
 def apitest_evidence_dir(apitest_config: ProjectConfig,
                          request: pytest.FixtureRequest) -> Path:
+    existing = request.config.stash.get(_EVIDENCE_KEY, None)
+    if existing is not None:
+        return existing
+    # 走到这里是直接调用（没经过 sessionstart），保持旧行为
     explicit = request.config.getoption("apitest_evidence")
     if explicit:
         directory = Path(explicit)
@@ -174,27 +259,67 @@ def _apitest_case(request: pytest.FixtureRequest) -> Iterator[None]:
     evidence_dir: Path = request.getfixturevalue("apitest_evidence_dir")
     param_instance = _param_instance(request.node)
     started = time.perf_counter()
-    with case_context(
-        auto_id=meta.auto_id,
-        evidence_dir=evidence_dir,
-        tc=meta.tc,
-        tp=meta.tp,
-        intent=meta.intent,
+
+    ctx = CaseContext(
+        auto_id=meta.auto_id, evidence_dir=evidence_dir,
+        tc=meta.tc, tp=meta.tp, intent=meta.intent,
         nodeid=request.node.nodeid,
-        param_instance=None,      # 先不传：instance_id 决定附件目录
-    ) as ctx:
+    )
+    bind(ctx)
+    # makereport 要读它：记录异常类型、teardown 失败、最后落盘
+    request.node._apitest_ctx = ctx      # noqa: SLF001
+    try:
         if param_instance is not None:
             ctx.record_param_instance(param_instance["id"], param_instance["params"])
-        # makereport 阶段（call 失败时）需要读它来记录异常类型
-        request.node._apitest_ctx = ctx      # noqa: SLF001
-        try:
-            yield
-        finally:
-            ctx.duration_s = time.perf_counter() - started
-            # 没有断言的用例不能算「通过」—— 它没验证任何东西
-            if ctx.execution_status is ExecutionStatus.PASSED and not ctx.assertions:
-                ctx.mark(ExecutionStatus.BLOCKED,
-                         "用例结束时没有任何断言，未验证任何内容")
+        yield
+    finally:
+        ctx.duration_s = time.perf_counter() - started
+        # 没有断言的用例不能算「通过」—— 它没验证任何东西
+        if ctx.execution_status is ExecutionStatus.PASSED and not ctx.assertions:
+            ctx.mark(ExecutionStatus.BLOCKED,
+                     "用例结束时没有任何断言，未验证任何内容")
+        unbind()
+
+
+def _skip_reason(call: pytest.CallInfo) -> str:
+    """从 CallInfo 里取 skip 原因。"""
+    try:
+        return str(call.excinfo.value) if call.excinfo else ""
+    except Exception:                                 # noqa: BLE001
+        return ""
+
+
+def _records_for_skipped(collected: list[dict[str, Any]],
+                         executed: list[Any]) -> list[Any]:
+    """给「收集到了但没执行」的实例补一条 skipped 记录。
+
+    典型来源是 ``@pytest.mark.skip``：setup 阶段就跳过，fixture 不执行，
+    没有 ctx 也就没有记录。没有这条，计划里的 TC 会被算成「未执行」，
+    而没有计划时它干脆不存在。
+    """
+    from apitest.evidence.models import ExecutionRecord
+
+    seen = {(record.auto_id, (record.param_instance or {}).get("id"))
+            for record in executed}
+    missing: list[Any] = []
+    for item in collected:
+        key = (item["auto_id"], item["instance_id"])
+        if key in seen:
+            continue
+        record = ExecutionRecord(
+            auto_id=item["auto_id"],
+            tc=item["tc"], tp=item["tp"], intent=item["intent"],
+            nodeid=item["nodeid"],
+            execution_status=ExecutionStatus.SKIPPED,
+            message="用例被跳过，未执行（收集阶段有登记）",
+            param_instance=({"id": item["instance_id"],
+                             "replayable": False,
+                             "reason": "用例被跳过，未采集参数"}
+                            if item["instance_id"] else None),
+        )
+        record.verdict = record.derive_verdict()
+        missing.append(record)
+    return missing
 
 
 def _data_condition_of(project: ProjectConfig) -> dict[str, Any]:
@@ -230,20 +355,34 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
     if ctx is None:
         return
 
-    if report.when == "call" and report.failed:
-        # ★ pytest 正常关闭 generator fixture，不会把测试异常 throw 进去，
-        #   所以 case_context 的 except 分支在这里不生效 —— 失败状态必须在
-        #   这里落，否则证据里会是一条 status=passed 的谎。
-        if ctx.execution_status is ExecutionStatus.PASSED:
-            detail = str(call.excinfo.value)[:400] if call.excinfo else ""
-            ctx.mark(ExecutionStatus.FAILED, detail)
+    if report.when == "call":
+        if report.failed:
+            # ★ pytest 正常关闭 generator fixture，不会把测试异常 throw 进去，
+            #   所以 case_context 的 except 分支在这里不生效 —— 失败状态必须
+            #   在这里落，否则证据里会是一条 status=passed 的谎。
+            if ctx.execution_status is ExecutionStatus.PASSED:
+                detail = str(call.excinfo.value)[:400] if call.excinfo else ""
+                ctx.mark(ExecutionStatus.FAILED, detail)
 
-        # 断言失败是预期结果，不记成「代码异常」
-        if call.excinfo is not None and not issubclass(call.excinfo.type, AssertionError):
-            ctx.record_error(call.excinfo.type.__name__, str(call.excinfo.value)[:500])
+            # 断言失败是预期结果，不记成「代码异常」
+            if call.excinfo is not None and not issubclass(call.excinfo.type, AssertionError):
+                ctx.record_error(call.excinfo.type.__name__,
+                                 str(call.excinfo.value)[:500])
+        elif report.skipped:
+            # 用例自己调了 pytest.skip()。断言可能已经记了几条，
+            # 但这条用例没有验证完成 —— 不能算 pass。
+            ctx.mark(ExecutionStatus.SKIPPED,
+                     _skip_reason(call) or "用例内调用 pytest.skip()")
+
     elif report.when in {"setup", "teardown"} and report.failed:
-        message = f"{call.excinfo.type.__name__}: {call.excinfo.value}" if call.excinfo else "未知错误"
+        message = (f"{call.excinfo.type.__name__}: {call.excinfo.value}"
+                   if call.excinfo else "未知错误")
         ctx.record_cleanup_error(f"{report.when} 阶段失败 — {message}"[:500])
+
+    if report.when == "teardown":
+        # 落盘放在最后：此时其他 fixture 的 teardown 已经跑完，
+        # cleanup_error 才可能记进来。早一步写就会漏掉清理失败。
+        flush(ctx)
 
 
 # ---------------------------------------------------------------- 收尾
@@ -256,10 +395,15 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     config = session.config
     project = config.stash.get(_PROJECT_KEY, None)
     evidence_dir = config.stash.get(_EVIDENCE_KEY, None)
-    if project is None or evidence_dir is None:
+    if evidence_dir is None:
         return
+    # project 可能为 None：整条用例被 @pytest.mark.skip 时，apitest_config
+    # fixture 根本不会执行。此时仍要写出证据（至少记录「收集到但没跑」），
+    # 只是缺少项目级元数据。
 
     executions = load_executions(evidence_dir)
+    executions.extend(_records_for_skipped(
+        config.stash.get(_COLLECTED_KEY, []) or [], executions))
     if not executions:
         return
 
@@ -270,21 +414,31 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     datasets = config.stash.get(_DATASETS_KEY, None)
     readonly = datasets.reports() if datasets is not None else {}
 
-    env_name = config.stash.get(_ENV_KEY, None) or project.default_environment
+    if project is not None:
+        env_name = config.stash.get(_ENV_KEY, None) or project.default_environment
+        project_id = project.project.id
+        base_url = project.environments[env_name].base_url
+    else:
+        env_name, project_id, base_url = "", "", ""
+
     document = EvidenceDocument(
         meta=Meta(
             execution_id=evidence_dir.name,
-            project_id=project.project.id,
+            project_id=project_id,
             environment=env_name,
-            base_url=project.environments[env_name].base_url,
+            base_url=base_url,
             exit_code=int(exitstatus),
             readonly=readonly,
-            code_version=collect_versions(
-                project.root,
-                service_version=project.project.service_version,
-                service_source=project.project.service_version_source,
-                data_condition=project.project.data_condition.model_dump()),
-            data_condition=_data_condition_of(project),
+            code_version=(
+                collect_versions(
+                    project.root,
+                    service_version=project.project.service_version,
+                    service_source=project.project.service_version_source,
+                    data_condition=project.project.data_condition.model_dump())
+                if project is not None
+                else collect_versions(Path.cwd())),
+            data_condition=(
+                _data_condition_of(project) if project is not None else {}),
             command=" ".join(sys.argv),
         ),
         executions=executions,

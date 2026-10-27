@@ -425,13 +425,22 @@ def verify_bundle(evidence_dir: Path) -> list[str]:
         problems.append(
             f"schema_version={version}，本读取方支持 {SCHEMA_VERSION}")
 
-    for name, info in (manifest.get("files") or {}).items():
+    listed = manifest.get("files") or {}
+    # 必需文件必须存在且登记。只看登记项的话，一份被删成「简化 manifest」
+    # 的证据包会无问题通过 —— 那正是最该拒绝的情况。
+    for name in REQUIRED_FILES:
+        if name not in listed:
+            problems.append(f"manifest 未登记必需文件：{name}")
+        if not (evidence_dir / name).is_file():
+            problems.append(f"缺少必需文件：{name}")
+
+    for name, info in listed.items():
         path = evidence_dir / name
         if not path.is_file():
             problems.append(f"登记的文件缺失：{name}")
             continue
         actual = _sha256(path)
-        if actual != info.get("sha256"):
+        if actual != (info or {}).get("sha256"):
             problems.append(f"{name} 内容与 manifest 记录的 sha256 不一致（已被改动）")
 
     if manifest.get("consistency", {}).get("execution_vs_junit") != "ok":
@@ -501,6 +510,10 @@ def _verify_attachments(evidence_dir: Path, manifest: dict[str, Any]) -> list[st
             problems.append(f"引用指向的文件不存在：{at}")
 
     return problems
+
+
+#: 少了任何一个，这份证据包都不能被消费
+REQUIRED_FILES = ("execution.json", "junit.xml", "case-inventory.yaml")
 
 
 __all__ = [

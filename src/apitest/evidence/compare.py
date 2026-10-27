@@ -114,27 +114,24 @@ def _environment(document: EvidenceDocument) -> Any:
     return document.meta.environment or None
 
 
-def _params_info(document: EvidenceDocument) -> tuple[bool, Any]:
-    """返回 ``(是否参数化, 摘要)``。
+#: 摘要缺失时的占位。参与比较但会被判成 unknown。
+_UNKNOWN_DIGEST = "?"
 
-    区分三种情况很重要：
 
-    - 用例没有参数 → 该项**不适用**，两边都没有就视为一致
-    - 有参数且记了摘要 → 参与比较
-    - 有参数但摘要缺失（旧证据包）→ unknown，不能当一致
+def _params_map(document: EvidenceDocument) -> dict[str, str]:
+    """``{AUTO[实例]: 参数摘要}`` —— **完整集合**，不是第一条。
 
-    把「没有参数」和「摘要丢了」混成一种，要么让非参数化用例永远无法归并，
-    要么让旧包悄悄通过可比性检查。
+    只取第一条会让「保持首个实例不变、改第二个实例」的两包被判成一致，
+    消费方据此归并就是错的。
     """
-    applicable = False
+    mapping: dict[str, str] = {}
     for record in document.executions:
         if record.param_instance is None:
             continue
-        applicable = True
-        digest = record.param_instance.get("params_digest")
-        if digest:
-            return True, f"{record.auto_id}:{digest}"
-    return applicable, None
+        instance = str(record.param_instance.get("id", ""))
+        digest = record.param_instance.get("params_digest") or _UNKNOWN_DIGEST
+        mapping[f"{record.auto_id}[{instance}]"] = digest
+    return mapping
 
 
 def _data_condition(document: EvidenceDocument) -> Any:
@@ -148,18 +145,43 @@ def _data_condition(document: EvidenceDocument) -> Any:
 
 
 def _params_pair(left: EvidenceDocument, right: EvidenceDocument) -> ConditionDiff:
-    """参数条件：双方都没参数 = 不适用（视为一致）；只有一边有 = 结构不同。"""
-    left_has, left_digest = _params_info(left)
-    right_has, right_digest = _params_info(right)
+    """参数条件，按**完整集合**比。
 
-    if not left_has and not right_has:
+    三种边界都要区分：
+
+    - 双方都没有参数 → 不适用（视为一致），否则非参数化用例永远无法归并
+    - 一侧有一侧没有 → different（结构变了）
+    - 摘要缺失 → unknown，不能当一致
+    """
+    left_map = _params_map(left)
+    right_map = _params_map(right)
+
+    if not left_map and not right_map:
         return ConditionDiff("params", "不适用", "不适用", "same",
                              "双方用例均无参数")
-    if left_has != right_has:
-        return ConditionDiff("params", left_digest or "有参数",
-                             right_digest or "有参数", "different",
-                             "一侧参数化、另一侧不是")
-    return _pair("params", left_digest, right_digest)
+
+    left_keys, right_keys = set(left_map), set(right_map)
+    if left_keys != right_keys:
+        only_left = sorted(left_keys - right_keys)
+        only_right = sorted(right_keys - left_keys)
+        return ConditionDiff(
+            "params", f"{len(left_map)} 个实例", f"{len(right_map)} 个实例",
+            "different",
+            f"实例集合不同：仅左侧 {only_left}；仅右侧 {only_right}")
+
+    if _UNKNOWN_DIGEST in (set(left_map.values()) | set(right_map.values())):
+        return ConditionDiff("params", "有参数", "有参数", "unknown",
+                             "存在未记录摘要的实例，无法判定参数是否一致")
+
+    if left_map == right_map:
+        return ConditionDiff("params", f"{len(left_map)} 个实例一致",
+                             f"{len(right_map)} 个实例一致", "same")
+
+    differing = sorted(key for key in left_keys
+                       if left_map[key] != right_map[key])
+    return ConditionDiff(
+        "params", f"{len(left_map)} 个实例", f"{len(right_map)} 个实例",
+        "different", f"参数不同：{differing}")
 
 
 def compare(left: EvidenceDocument, right: EvidenceDocument) -> ComparisonResult:

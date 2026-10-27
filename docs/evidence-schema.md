@@ -191,9 +191,31 @@ CK 的金额是 `Decimal`、PG 的 `numeric`/`timestamp` 同理。不做这一�
 
 摘要必须带算法名 —— 裸摘要在两包用不同算法或不同截断长度时无法比较。
 
+### C3.5 生命周期事实完整
+
+执行记录必须在**所有 fixture 的 teardown 都跑完之后**才固化：
+
+- 落盘时机是 `pytest_runtest_makereport(when="teardown")`，不是 fixture 的
+  `finally`。早一步写，「另一个 fixture 在 yield 之后抛异常」这类清理失败
+  就永远进不到证据里
+- `cleanup_error` 存在时结论降级为 `invalid` —— 断言可能都对，但环境没
+  恢复干净，这次「通过」不可信
+- `@pytest.mark.skip` 的用例 fixture 不执行，必须在**收集阶段**登记；
+  没有这条，这类用例在证据里彻底消失，整包甚至不会生成
+- 用例内 `pytest.skip()` 覆盖已通过的断言状态：没验完就是没验完
+
 ### C4 校验和有效
 
 `manifest.json.files` 中每个文件的 sha256 与实际内容一致。
+
+### C4.5 必需文件齐全
+
+`execution.json`、`junit.xml`、`case-inventory.yaml` 三件必须在 manifest 里
+登记且实际存在。只看「已登记项」的话，一份被删成「简化 manifest」的证据包
+会无问题通过 —— 那正是最该拒绝的情况。
+
+`verify_bundle()` 挂在**消费入口**上（`check`、`render` 先校验再读），
+不是可选的独立命令：能发现问题却没人调用，等于没有这道检查。
 
 ### C5 版本可判定
 

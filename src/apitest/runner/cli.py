@@ -240,6 +240,23 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------- check
+def _guard_evidence(evidence: Path) -> str | None:
+    """消费证据前先校验完整性。
+
+    ``verify_bundle`` 能发现问题却没人调用 —— 改过的 execution.json 照样能
+    渲染成报告。校验必须挂在消费入口上，不能只作为可选的独立命令。
+    """
+    from apitest.evidence.bundle import verify_bundle
+
+    problems = verify_bundle(evidence)
+    if not problems:
+        return None
+    for problem in problems:
+        print(f"! {problem}", file=sys.stderr)
+    return (f"证据包校验未通过（{len(problems)} 项），拒绝消费。"
+            f"先修好证据或重新执行，不要拿一份被改动过的证据出报告。")
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """离线检查：只读已捕获证据，不重新请求环境。"""
     from apitest.evidence.models import Check
@@ -248,6 +265,11 @@ def cmd_check(args: argparse.Namespace) -> int:
     doc_path = evidence / "execution.json"
     if not doc_path.is_file():
         print(f"找不到 {doc_path}", file=sys.stderr)
+        return 1
+
+    refusal = _guard_evidence(evidence)
+    if refusal:
+        print(refusal, file=sys.stderr)
         return 1
 
     document = EvidenceDocument.model_validate_json(doc_path.read_text(encoding="utf-8"))
@@ -284,6 +306,11 @@ def cmd_render(args: argparse.Namespace) -> int:
     doc_path = evidence / "execution.json"
     if not doc_path.is_file():
         print(f"找不到 {doc_path}（先执行 apitest run）", file=sys.stderr)
+        return 1
+
+    refusal = _guard_evidence(evidence)
+    if refusal:
+        print(refusal, file=sys.stderr)
         return 1
 
     document = EvidenceDocument.model_validate_json(doc_path.read_text(encoding="utf-8"))

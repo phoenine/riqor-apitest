@@ -477,6 +477,8 @@ apitest init / scaffold / verify / run / check / render
 - `required_assertions` 有稳定 ID（`RA-01`），断言用 `covers="RA-01"` 显式声明覆盖
 - **按「验证项」汇总，不是按「用例」取最弱**：两条用例各自覆盖一半，
   合起来是完整覆盖 —— 逐用例取最弱会把完整覆盖误判成部分验证
+- **豁免不是验过**。报告的「全绿」判断基于 `unverified`（= 待补 + 已豁免），
+  不是 `gaps`。否则计划里唯一一条 TC 被豁免时，报告会说「全部达到已验证」
 - 覆盖 = 「验了」，失败也覆盖（结论记 fail）；但 `not_reached` 不算覆盖
 - **参数实例默认全部要跑到**（`instance_policy: all`）：`a` 通过、`b` 跳过
   只能算部分验证。计划显式写 `instance_policy: any` 才放宽

@@ -31,6 +31,38 @@ SENSITIVE_HEADERS = {
     "proxy-authorization", "token",
 }
 
+#: 字段名命中这些词的一律掩码。不用裸 ``key`` —— 会误伤 sort_key/primary_key。
+_SENSITIVE_FIELD_RE = re.compile(
+    r"(pass(word|wd)?|secret|token|auth|cookie|credential|"
+    r"api[-_]?key|access[-_]?key|private[-_]?key|session[-_]?id)", re.IGNORECASE)
+
+#: 运行时注册的敏感位置，由认证配置填充。
+#: 固定名单覆盖不到 ``auth.key_header: X-Custom-Key`` 这类自定义位置 ——
+#: 而配置允许用户随便起名，名单永远列不全。
+_registered_headers: set[str] = set()
+_registered_fields: set[str] = set()
+
+
+def register_sensitive(*, headers: Any = (), fields: Any = ()) -> None:
+    """登记本项目实际使用的敏感头名与参数名。
+
+    由插件在环境解析后调用。名字来自配置，不是猜出来的。
+    """
+    _registered_headers.update(str(h).lower() for h in headers if h)
+    _registered_fields.update(str(f).lower() for f in fields if f)
+
+
+def is_sensitive_field(name: str) -> bool:
+    lowered = str(name).lower()
+    if lowered in _registered_fields:
+        return True
+    return bool(_SENSITIVE_FIELD_RE.search(lowered))
+
+
+def is_sensitive_header(name: str) -> bool:
+    lowered = str(name).lower()
+    return lowered in SENSITIVE_HEADERS or lowered in _registered_headers
+
 #: 响应体单条截断上限（字符）
 BODY_LIMIT = 20_000
 
@@ -54,7 +86,7 @@ def _preview(value: Any) -> str:
 def redact_headers(headers: dict[str, str] | None) -> dict[str, str]:
     out: dict[str, str] = {}
     for key, value in (headers or {}).items():
-        out[key] = "***" if key.lower() in SENSITIVE_HEADERS else value
+        out[key] = "***" if is_sensitive_header(key) else value
     return out
 
 
@@ -67,13 +99,20 @@ def redact_text(text: str) -> str:
 
 
 def redact_payload(value: Any) -> Any:
+    """递归掩码：先按字段名，再按文本里的凭据片段。
+
+    只做文本正则是不够的 —— ``{"api_key": "xxx"}`` 的键名不在任何固定
+    名单里，值就会原样落盘。查询参数走的就是这条路径。
+    """
     if isinstance(value, str):
         return redact_text(value)
-    if isinstance(value, (dict, list)):
-        try:
-            return json.loads(redact_text(json.dumps(value, ensure_ascii=False)))
-        except (TypeError, ValueError):
-            return redact_text(str(value))
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            out[key] = "***" if is_sensitive_field(key) else redact_payload(item)
+        return out
+    if isinstance(value, (list, tuple)):
+        return [redact_payload(item) for item in value]
     return value
 
 
@@ -308,10 +347,30 @@ def case_context(*, auto_id: str, evidence_dir: Path, tc: str | None = None,
         raise
     finally:
         _CURRENT.reset(token)
-        evidence_dir.mkdir(parents=True, exist_ok=True)
-        record = ctx.build()
-        with (evidence_dir / "executions.jsonl").open("a", encoding="utf-8") as fh:
-            fh.write(record.model_dump_json() + "\n")
+        flush(ctx)
+
+
+def bind(ctx: CaseContext) -> None:
+    """把 ctx 设为当前用例，返回由调用方负责解除。**不落盘。**
+
+    pytest 插件用它把「建立上下文」和「固化证据」拆开：fixture 只建上下文，
+    等 teardown 报告出来后再 flush。否则别的 fixture 在 yield 之后抛异常时，
+    记录已经写完了 —— ``cleanup_error`` 永远进不到证据里。
+    """
+    _CURRENT.set(ctx)
+
+
+def unbind() -> None:
+    """解除当前用例绑定。"""
+    _CURRENT.set(None)
+
+
+def flush(ctx: CaseContext) -> None:
+    """把 ctx 固化进 ``executions.jsonl``。可重复调用则产生多条记录。"""
+    ctx.evidence_dir.mkdir(parents=True, exist_ok=True)
+    record = ctx.build()
+    with (ctx.evidence_dir / "executions.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(record.model_dump_json() + "\n")
 
 
 def load_executions(evidence_dir: Path) -> list[ExecutionRecord]:

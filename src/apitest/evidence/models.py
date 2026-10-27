@@ -203,6 +203,10 @@ class ExecutionRecord(_Model):
         if self.execution_status is ExecutionStatus.BLOCKED:
             return None
 
+        # 清理失败：断言可能都对，但环境没恢复干净，这次「通过」不可信。
+        # 不能洗成 fail（业务判据没失败），也不能留成 pass。
+        if self.cleanup_error:
+            return Verdict.INVALID
         # 证据自相矛盾比「前提不成立」更根本，排在其前
         if any(a.check is Check.REPLAY_MISMATCH for a in self.assertions):
             return Verdict.INVALID

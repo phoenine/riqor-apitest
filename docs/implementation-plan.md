@@ -30,6 +30,10 @@
 | 只读严格模式 + 探针异常分类 | `dataset/readonly.py`、`__init__.py` | `tests/test_boundaries.py` |
 | 附件登记与引用校验 | `evidence/bundle.py` | `tests/test_boundaries.py` |
 | 数据条件元数据 + 可比性判定 | `evidence/compare.py`、`config.py` | `tests/test_comparability.py` |
+| pytest 生命周期（skip / teardown / 收集登记） | `runner/pytest_plugin.py` | `tests/test_lifecycle.py` |
+| 凭据脱敏（自定义认证位置） | `context.py`、`pytest_plugin.py` | `tests/test_lifecycle.py` |
+| 证据校验接入消费入口 | `runner/cli.py`、`evidence/bundle.py` | `tests/test_lifecycle.py` |
+| 运行目录唯一化与拒绝复用 | `runner/pytest_plugin.py` | `tests/test_lifecycle.py` |
 | HTML 报告三层 + 主题可复制 | `report/` | 同上 |
 | CLI：init / scaffold / verify / run / check / render | `runner/cli.py` | 手工 + 示例 |
 

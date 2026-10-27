@@ -338,16 +338,20 @@ def build_matrix(document: EvidenceDocument,
         summary[row["state"]] += 1
 
     waived = sum(1 for row in rows if row["waived"])
-    gaps = sum(1 for row in rows
-               if row["state"] not in (CoverageState.VERIFIED.value,)
-               and not row["waived"])
+    unverified = [row for row in rows
+                  if row["state"] != CoverageState.VERIFIED.value]
+    gaps = sum(1 for row in unverified if not row["waived"])
+    # 豁免不等于验过。只报 gaps 会让「计划里唯一一条 TC 是豁免的」显示成全绿。
+    waived_gaps = len(unverified) - gaps
 
     return {
         "computable": True,
         "rows": rows,
         "summary": summary,
         "waived": waived,
+        "waived_gaps": waived_gaps,
         "gaps": gaps,
+        "unverified": len(unverified),
         "total": len(rows),
     }
 

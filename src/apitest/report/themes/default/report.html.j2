@@ -181,12 +181,15 @@
     {% for state, count in matrix.summary.items() %}{% if count %}{{ labels.state[state] }} {{ count }}{% if not loop.last %} · {% endif %}{% endif %}{% endfor %}
     {% if matrix.waived %} · 其中显式豁免 {{ matrix.waived }} 项（缺口保留）{% endif %}
   </p>
-  {% if matrix.gaps %}
+  {% if matrix.unverified %}
   <div class="note">
-    仍有 <strong>{{ matrix.gaps }}</strong> 个测试用例未达到「已验证」，见下表。
+    仍有 <strong>{{ matrix.unverified }}</strong> 个测试用例未达到「已验证」
+    （{{ matrix.gaps }} 个待补、{{ matrix.waived_gaps }} 个已豁免），见下表。
   </div>
   {% else %}
-  <div class="note ok">计划范围内全部测试用例均达到「已验证」。</div>
+  <div class="note ok">
+    计划范围内全部 {{ matrix.total }} 个测试用例均达到「已验证」，无豁免缺口。
+  </div>
   {% endif %}
 
   <table>
