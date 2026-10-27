@@ -394,6 +394,40 @@ apitest init / scaffold / verify / run / check / render
 `check` 的定位、边界与产物见 1.6：`unsupported` 不等于用例无效，
 `survived` 不是盲点计数，两者都不影响验证结论。
 
+### 5.x 跨运行比较：只判定，不归并
+
+同一条用例会在不同条件下反复跑。**「取最近一次」是有条件的** —— 条件不同
+时两次执行是两件事，不能互相覆盖。
+
+五项条件：
+
+| 条件 | 来源 | 缺失时 |
+|---|---|---|
+| 运行环境 | `meta.environment` | unknown |
+| 被测服务版本 | `meta.code_version.service.version` | unknown |
+| 测试代码版本 | `meta.code_version.test_code` | unknown（工作区 dirty 也算） |
+| 参数 | `execution.param_instance.params_digest` | 无参数=不适用；有参数无摘要=unknown |
+| 数据条件 | `meta.data_condition`（window / snapshot / settled_through） | unknown |
+
+三态判定：
+
+```text
+任一条件不同        → different  必须并列保留
+全部一致            → same       可以归并
+其余（有缺失）      → unknown    默认不归并
+```
+
+**缺条件不等于相同。** 这条是有代价的（非 git 项目永远 unknown），但反过来
+做的代价更大：ePVS 做过 p50 全量回灌，回灌前后跑同一条统计用例，环境、代码、
+参数都没变，结果却不同 —— 当成「同一件事取最近一次」会把数据问题误判成已修复。
+
+**这里只回答「能不能放在一起看」，不回答「哪个结论算数」。**
+取最近一次、冲突汇总、历史归并都属于结果管理层，不属于本包 —— 一旦 SDK
+开始决定哪个结论有效，它就会长成又一个调度器。
+
+`compare(left, right)` 返回 `ComparisonResult`，只有 `verdict`、逐项 `conditions`
+和 `summary()`，**没有 winner / latest / merged**。
+
 ## 六、报告
 
 三层信息，Jinja2 渲染：

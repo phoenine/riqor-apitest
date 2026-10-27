@@ -137,6 +137,25 @@ class ReportConfig(BaseModel):
     plan: str | None = None
 
 
+class DataConditionConfig(BaseModel):
+    """数据条件。跨运行比较时必须一致，否则两次执行不可归并。
+
+    ePVS 上真实踩过：p50 全量回灌前后跑同一条统计用例，环境、代码、参数
+    都没变，结果却不同。缺这一项就会把数据问题误判成已修复。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: 数据时间窗，如 "2026-09-01..2026-10-27"
+    window: str | None = None
+    #: 数据快照标识（回灌批次、重建标记）
+    snapshot: str | None = None
+    #: 统计表已结算到哪天（T+1 数据源常用）
+    settled_through: str | None = None
+    #: 说明，不参与可比性判定
+    note: str = ""
+
+
 class ProjectMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -145,6 +164,8 @@ class ProjectMeta(BaseModel):
     #: 被测服务版本声明。留空则记 unknown —— 跨运行比较时猜不得。
     service_version: str | None = None
     service_version_source: str = ""
+    #: 数据条件；留空则跨运行比较时该项记为 unknown
+    data_condition: DataConditionConfig = Field(default_factory=DataConditionConfig)
 
 
 class ProjectConfig(BaseModel):

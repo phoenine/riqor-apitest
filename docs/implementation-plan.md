@@ -29,6 +29,7 @@
 | 查询样本无损转换（Decimal/datetime） | `evidence/serialize.py` | `tests/test_boundaries.py` |
 | 只读严格模式 + 探针异常分类 | `dataset/readonly.py`、`__init__.py` | `tests/test_boundaries.py` |
 | 附件登记与引用校验 | `evidence/bundle.py` | `tests/test_boundaries.py` |
+| 数据条件元数据 + 可比性判定 | `evidence/compare.py`、`config.py` | `tests/test_comparability.py` |
 | HTML 报告三层 + 主题可复制 | `report/` | 同上 |
 | CLI：init / scaffold / verify / run / check / render | `runner/cli.py` | 手工 + 示例 |
 
@@ -57,7 +58,7 @@
 ### P3 契约细节
 
 - C3 已实现：serialize.py 显式标注 replayable，索引带算法名摘要
-- 不同条件（环境/版本/数据）的多次执行并列保留，聚合规则未实现
+- 五项条件已成型（environment / service / test_code / params / data_condition），`compare()` 只判定可比性，不做归并
 
 ## 不做
 

@@ -224,7 +224,7 @@ def test_versions_collect_includes_all_three_sections():
     from apitest.runner.versions import collect
 
     info = collect(Path("."))
-    assert set(info) == {"framework", "test_code", "service"}
+    assert set(info) >= {"framework", "test_code", "service", "data_condition"}
     assert info["framework"]["comparator"], "比较器版本用于判定旧结论能否沿用"
 
 

@@ -83,7 +83,8 @@ def _framework() -> dict[str, Any]:
 
 def collect(root: Path, *,
             service_version: str | None = None,
-            service_source: str = "") -> dict[str, Any]:
+            service_source: str = "",
+            data_condition: dict[str, Any] | None = None) -> dict[str, Any]:
     """汇总版本信息。
 
     ``service_version`` 由配置或调用方给；给不出就记 unknown ——
@@ -100,4 +101,13 @@ def collect(root: Path, *,
         "framework": _framework(),
         "test_code": _test_code(Path(root)),
         "service": service,
+        "data_condition": _data_condition(data_condition),
     }
+
+
+def _data_condition(declared: dict[str, Any] | None) -> dict[str, Any]:
+    """数据条件。没声明就空着，并在比较时记为 unknown。"""
+    if not declared:
+        return {}
+    keys = ("window", "snapshot", "settled_through", "note")
+    return {k: declared[k] for k in keys if declared.get(k)}

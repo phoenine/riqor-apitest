@@ -20,6 +20,7 @@ from apitest.case import CaseMeta, case, meta_of
 from apitest.client import APIClient, RecordedResponse
 from apitest.config import ConfigError, EnvironmentConfig, ProjectConfig, load_config
 from apitest.context import CaseContext, case_context, current_context, load_executions
+from apitest.evidence.compare import Comparability, compare
 from apitest.dataset import Dataset, build_dataset
 from apitest.expect import COMPARATORS, expect
 from apitest.plan import (

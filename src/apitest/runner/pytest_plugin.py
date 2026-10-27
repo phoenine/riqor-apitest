@@ -197,6 +197,12 @@ def _apitest_case(request: pytest.FixtureRequest) -> Iterator[None]:
                          "用例结束时没有任何断言，未验证任何内容")
 
 
+def _data_condition_of(project: ProjectConfig) -> dict[str, Any]:
+    """运行级数据条件，进 meta 供跨运行比较。"""
+    declared = project.project.data_condition.model_dump()
+    return {key: value for key, value in declared.items() if value}
+
+
 def _param_instance(node: pytest.Node) -> dict[str, Any] | None:
     """从 pytest 的 callspec 取出参数实例身份。
 
@@ -276,7 +282,9 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
             code_version=collect_versions(
                 project.root,
                 service_version=project.project.service_version,
-                service_source=project.project.service_version_source),
+                service_source=project.project.service_version_source,
+                data_condition=project.project.data_condition.model_dump()),
+            data_condition=_data_condition_of(project),
             command=" ".join(sys.argv),
         ),
         executions=executions,

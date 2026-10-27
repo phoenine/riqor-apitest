@@ -237,6 +237,8 @@ class Meta(_Model):
     code_version: dict[str, Any] = Field(default_factory=dict)
     #: 每个数据源的只读保障实况（declared / applied / verified）
     readonly: dict[str, Any] = Field(default_factory=dict)
+    #: 数据条件（window / snapshot / settled_through）—— 跨运行比较的输入
+    data_condition: dict[str, Any] = Field(default_factory=dict)
     config_digest: str = ""
     redaction_rule_version: str = "1"
     command: str = ""
