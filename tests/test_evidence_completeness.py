@@ -263,8 +263,17 @@ def test_changed_files_does_not_eat_leading_space():
     names = _changed_files(Path("."))
     if names is None:
         pytest.skip("不是 git 仓库")
+    # 删除也是合法变更：被删掉的文件当然指不到实际文件。
+    # 这里只保留「路径本身没被切坏」的判据，不要把 D 当异常。
+    deleted = set(
+        subprocess.run(["git", "status", "--porcelain"], cwd=Path("."),
+                       capture_output=True, text=True, check=True
+                       ).stdout.splitlines())
+    deleted = {line[3:].strip() for line in deleted if line[:2].strip() == "D"}
     for name in names:
         assert not name.startswith(" "), f"{name!r} 残留前导空格"
+        if name in deleted:
+            continue
         # 真正的判据是「名字指到实际存在的东西」——截掉首字符的路径不存在。
         # 早先这里卡扩展名白名单，既验不出问题（--name-only 没有首列空格可 strip），
         # 又会把 .gitignore 这类合法文件判成可疑。
