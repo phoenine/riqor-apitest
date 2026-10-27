@@ -73,8 +73,10 @@
   .mark-unknown { color: var(--muted); }
   .assert-intent { color: var(--fg); font-family: inherit; font-size: 12px; margin-top: 2px; }
   .assert-source { color: var(--muted); font-size: 11px; margin-top: 1px; }
-  .waiver { margin-top: 4px; padding: 4px 8px; background: var(--soft); border-radius: 4px;
-            font-size: 12px; color: var(--muted); }
+  .uncovered { margin-top: 4px; font-size: 12px; color: var(--muted); line-height: 1.55; }
+  .uncovered-tag { display: block; font-weight: 600; color: var(--fg); margin-bottom: 2px; }
+  .uncovered code { background: var(--soft); padding: 0 4px; border-radius: 3px; }
+  .uncovered-why { margin-top: 5px; padding-top: 5px; border-top: 1px dashed var(--line); }
   .tag.verified { background: #dafbe1; color: var(--ok); }
 
   .note { border-left: 3px solid var(--warn); background: #fffdf3; padding: 10px 14px; margin: 12px 0; font-size: 13px; }
@@ -240,12 +242,18 @@
         </td>
         <td class="col-note">
           {{ row.note }}
-          {% if row.uncovered %}
-          <div class="muted">
-            未覆盖：
+          {% if row.uncovered or row.waived %}
+          <div class="uncovered">
+            <span class="uncovered-tag">未覆盖</span>
             {% for item in row.uncovered %}
-            <code>{{ item.id }}</code>{% if item.text %} {{ item.text }}{% endif %}{% if not item.id_explicit %} <span class="tag observed">ID 非显式</span>{% endif %}{% if not loop.last %}；{% endif %}
+            <div><code>{{ item.id }}</code>{% if item.text %} {{ item.text }}{% endif %}{% if not item.id_explicit %} <span class="tag observed">ID 非显式</span>{% endif %}</div>
             {% endfor %}
+            {% if row.waived %}
+            <div class="uncovered-why">
+              {{ row.waived.reason }}
+              {% if row.waived.impact %}<br>影响：{{ row.waived.impact }}{% endif %}
+            </div>
+            {% endif %}
           </div>
           {% endif %}
         </td>
