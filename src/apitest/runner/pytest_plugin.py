@@ -43,6 +43,8 @@ _ENV_KEY: "StashKey[str]" = StashKey()
 _EVIDENCE_KEY: "StashKey[Path]" = StashKey()
 _DATASETS_KEY: "StashKey[object]" = StashKey()
 _COLLECTED_KEY: "StashKey[list]" = StashKey()
+_OUTCOMES_KEY: "StashKey[dict]" = StashKey()
+_DESELECTED_KEY: "StashKey[set]" = StashKey()
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -78,6 +80,19 @@ def pytest_collection_modifyitems(session: pytest.Session,
             "instance_id": str(callspec.id) if callspec is not None else None,
         })
     config.stash[_COLLECTED_KEY] = collected
+
+
+def pytest_deselected(items: list[pytest.Item]) -> None:
+    """``-k`` / ``-m`` 排除掉的用例。
+
+    它们不属于本次运行范围。补成 not_run 会让报告凭空多出缺口，
+    让「我只跑这一条」看起来像「有一堆没跑」。
+    """
+    if not items:
+        return
+    nodeids = items[0].config.stash.get(_DESELECTED_KEY, None) or set()
+    nodeids.update(item.nodeid for item in items)
+    items[0].config.stash[_DESELECTED_KEY] = nodeids
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -281,6 +296,24 @@ def _apitest_case(request: pytest.FixtureRequest) -> Iterator[None]:
         unbind()
 
 
+def _remember_outcome(item: pytest.Item, report: pytest.TestReport) -> None:
+    """记下每个 item 的真实结局。
+
+    「没有执行记录」有很多种原因：setup 崩溃、被 -x 提前停止、根本没被选中。
+    统一补成 skipped 会把这些压成同一个状态，读证据的人分不清是「跳过了」
+    还是「压根没跑」。
+    """
+    outcomes = item.config.stash.get(_OUTCOMES_KEY, None) or {}
+    entry = outcomes.setdefault(item.nodeid, {})
+    entry[report.when] = {
+        "outcome": report.outcome,
+        "failed": bool(report.failed),
+        "skipped": bool(report.skipped),
+        "longrepr": str(report.longrepr)[:300] if report.failed else "",
+    }
+    item.config.stash[_OUTCOMES_KEY] = outcomes
+
+
 def _skip_reason(call: pytest.CallInfo) -> str:
     """从 CallInfo 里取 skip 原因。"""
     try:
@@ -289,9 +322,32 @@ def _skip_reason(call: pytest.CallInfo) -> str:
         return ""
 
 
+def _classify_missing(item: dict[str, Any],
+                      outcomes: dict[str, dict[str, Any]]) -> tuple[Any, str]:
+    """判断「收集到但没有执行记录」到底属于哪种情况。
+
+    不能一律当 skipped：setup 崩溃是基础设施问题，-x 之后没跑到的用例
+    根本没开始，这两者在证据里的含义完全不同。
+    """
+    entry = outcomes.get(item["nodeid"]) or {}
+    setup = entry.get("setup") or {}
+    call = entry.get("call") or {}
+
+    if setup.get("failed"):
+        reason = setup.get("longrepr") or "setup 阶段失败"
+        return ExecutionStatus.INFRASTRUCTURE_ERROR, f"setup 阶段失败：{reason}"[:500]
+    if setup.get("skipped") or call.get("skipped"):
+        return ExecutionStatus.SKIPPED, "用例被跳过，未执行"
+    if not entry:
+        return ExecutionStatus.NOT_RUN, "未执行（可能被 -x 提前停止，或未被选中）"
+    return ExecutionStatus.NOT_RUN, "未产生执行记录"
+
+
 def _records_for_skipped(collected: list[dict[str, Any]],
-                         executed: list[Any]) -> list[Any]:
-    """给「收集到了但没执行」的实例补一条 skipped 记录。
+                         executed: list[Any],
+                         outcomes: dict[str, dict[str, Any]] | None = None,
+                         deselected: set[str] | None = None) -> list[Any]:
+    """给「收集到了但没执行」的实例补记录，状态按真实结局分类。
 
     典型来源是 ``@pytest.mark.skip``：setup 阶段就跳过，fixture 不执行，
     没有 ctx 也就没有记录。没有这条，计划里的 TC 会被算成「未执行」，
@@ -302,19 +358,23 @@ def _records_for_skipped(collected: list[dict[str, Any]],
     seen = {(record.auto_id, (record.param_instance or {}).get("id"))
             for record in executed}
     missing: list[Any] = []
+    skip_nodes = deselected or set()
     for item in collected:
+        if item["nodeid"] in skip_nodes:
+            continue          # 本次范围外，不留痕
         key = (item["auto_id"], item["instance_id"])
         if key in seen:
             continue
+        status, message = _classify_missing(item, outcomes or {})
         record = ExecutionRecord(
             auto_id=item["auto_id"],
             tc=item["tc"], tp=item["tp"], intent=item["intent"],
             nodeid=item["nodeid"],
-            execution_status=ExecutionStatus.SKIPPED,
-            message="用例被跳过，未执行（收集阶段有登记）",
+            execution_status=status,
+            message=message,
             param_instance=({"id": item["instance_id"],
                              "replayable": False,
-                             "reason": "用例被跳过，未采集参数"}
+                             "reason": "用例未执行，未采集参数"}
                             if item["instance_id"] else None),
         )
         record.verdict = record.derive_verdict()
@@ -351,6 +411,8 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
     """
     outcome = yield
     report = outcome.get_result()
+    _remember_outcome(item, report)
+
     ctx = getattr(item, "_apitest_ctx", None)
     if ctx is None:
         return
@@ -373,6 +435,12 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
             # 但这条用例没有验证完成 —— 不能算 pass。
             ctx.mark(ExecutionStatus.SKIPPED,
                      _skip_reason(call) or "用例内调用 pytest.skip()")
+
+    elif report.when == "setup" and report.skipped:
+        # fixture 里先记了几条断言再 pytest.skip()，正文根本没跑。
+        # 不处理的话状态停在 passed，证据就是一条谎。
+        ctx.mark(ExecutionStatus.SKIPPED,
+                 _skip_reason(call) or "setup 阶段跳过")
 
     elif report.when in {"setup", "teardown"} and report.failed:
         message = (f"{call.excinfo.type.__name__}: {call.excinfo.value}"
@@ -403,7 +471,10 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 
     executions = load_executions(evidence_dir)
     executions.extend(_records_for_skipped(
-        config.stash.get(_COLLECTED_KEY, []) or [], executions))
+        config.stash.get(_COLLECTED_KEY, []) or [],
+        executions,
+        config.stash.get(_OUTCOMES_KEY, None) or {},
+        config.stash.get(_DESELECTED_KEY, None) or set()))
     if not executions:
         return
 

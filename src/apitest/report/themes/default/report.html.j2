@@ -252,6 +252,14 @@
       <pre>{{ item.message }}</pre>
       {% endif %}
 
+      {% if item.cleanup_error %}
+      <div class="note bad">
+        <strong>清理失败</strong> —— 断言可能都已通过，但环境没恢复干净，
+        这次「通过」不可信。<br>
+        <span class="mono">{{ item.cleanup_error }}</span>
+      </div>
+      {% endif %}
+
       {% if item.preconditions %}
       <h3>数据前提</h3>
       <table>

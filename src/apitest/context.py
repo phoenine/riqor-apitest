@@ -66,8 +66,11 @@ def is_sensitive_header(name: str) -> bool:
 #: 响应体单条截断上限（字符）
 BODY_LIMIT = 20_000
 
-_REDACT_RE = re.compile(r"(\"(?:password|passwd|token|secret|access_token|refresh_token)\"\s*:\s*)\"[^\"]*\"",
-                        re.IGNORECASE)
+_REDACT_RE = re.compile(
+    r"(\"(?:password|passwd|token|secret|access_token|refresh_token|"
+    r"api[-_]?key|access[-_]?key|private[-_]?key|client[-_]?secret)\"\s*:\s*)"
+    r"\"[^\"]*\"",
+    re.IGNORECASE)
 
 
 #: 展示用预览的长度上限 —— 只影响报告，不影响证据
@@ -153,9 +156,17 @@ class CaseContext:
     _counters: dict[str, int] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ 附件
-    def _next_id(self, prefix: str) -> str:
+    def _next_id(self, prefix: str, width: int = 3) -> str:
         self._counters[prefix] = self._counters.get(prefix, 0) + 1
-        return f"{prefix}-{self._counters[prefix]:03d}"
+        return f"{prefix}-{self._counters[prefix]:0{width}d}"
+
+    def next_assertion_id(self) -> str:
+        """断言 ID 必须按用例重置。
+
+        用类级全局计数器时，同一条用例整组跑是 AS-0002、单独跑却是 AS-0001 ——
+        证据里的 ID 随执行范围漂移，跨运行就没法对齐。
+        """
+        return self._next_id("AS", width=4)
 
     def _write_attachment(self, folder: str, item_id: str, payload: Any) -> str:
         """落盘一份附件，返回**相对于证据目录**的路径。

@@ -13,7 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from apitest.context import is_sensitive_field, is_sensitive_header, redact_headers, redact_payload
+from apitest.context import (
+    CaseContext,
+    is_sensitive_field,
+    is_sensitive_header,
+    redact_headers,
+    redact_payload,
+)
 from apitest.evidence.compare import compare
 from apitest.evidence.models import EvidenceDocument, ExecutionRecord, Meta
 from apitest.plan import Plan, PlannedCase, Waiver, build_matrix
@@ -206,13 +212,30 @@ environments:
   local:
     base_url: "http://127.0.0.1:1"
     auth:
-      type: header
-      header: X-Custom-Key
-      value_env: FAKE_SECRET_XYZ
+      type: api_key
+      key_env: FAKE_SECRET_XYZ
+      key_header: X-Custom-Key
+      key_query: api_key
 """
     os.environ["FAKE_SECRET_XYZ"] = "super-secret-value"
     root = _project('''\
-from apitest import case, expect, req
+import httpx
+import pytest
+
+from apitest import APIClient, case, expect, req
+
+
+@pytest.fixture(scope="session")
+def api(apitest_environment):
+    """真发一次请求：MockTransport 让请求完整走一遍，但不碰网络。"""
+    def handler(request):
+        return httpx.Response(
+            200, json={"api_key": "super-secret-value", "data": [1, 2]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    api_client = APIClient(apitest_environment, client=client)
+    yield api_client
+    api_client.close()
 
 
 @case(id="AUTO-006", tc="TC-6", intent="凭据不进证据")
@@ -223,9 +246,19 @@ def test_cred(api):
     evidence = tmp_path / "ev"
     _run(root, evidence)
 
-    leaked = [p.as_posix() for p in (evidence / "attachments").rglob("*.json")
+    requests = list((evidence / "attachments").rglob("requests/*.json"))
+    assert requests, "没有请求附件 —— 说明请求根本没发出去，这条测试是假通过"
+
+    leaked = [p.as_posix() for p in requests
               if "super-secret-value" in p.read_text(encoding="utf-8")]
     assert leaked == [], f"凭据出现在 {leaked}"
+
+    payload = json.loads(requests[0].read_text())
+    assert payload["headers"].get("X-Custom-Key") == "***", "自定义认证头没掩码"
+    assert payload["params"].get("api_key") == "***", "查询参数没掩码"
+    assert payload["response_body"], "响应体应当被记录"
+    assert "super-secret-value" not in payload["response_body"], \
+        "响应 JSON 里的凭据也要掩码"
 
 
 # ================================================================ 参数集合
@@ -415,3 +448,207 @@ def test_one(api):
     assert matrix["unverified"] == 0
     assert matrix["gaps"] == 0
     assert matrix["waived_gaps"] == 0
+
+
+# ================================================================ setup 跳过
+def test_skip_in_fixture_setup_is_not_pass(tmp_path):
+    """fixture 里先记了断言再 skip —— 正文根本没跑，不能算通过。"""
+    root = _project("""\
+import pytest
+from apitest import case, expect, req
+
+
+@pytest.fixture
+def half_ready():
+    expect(1).equal_to(1, basis=req("REQ-1", confirmed=True))
+    pytest.skip("依赖没准备好")
+
+
+@case(id="AUTO-020", tc="TC-20", intent="正文没跑")
+def test_t(api, half_ready):
+    expect(999).equal_to(999, basis=req("REQ-2", confirmed=True))
+""")
+    _, doc = _run(root, tmp_path / "ev")
+    record = doc["executions"][0]
+
+    assert record["execution_status"] == "skipped"
+    assert record["verdict"] is None
+
+
+# ================================================================ 缺失记录分类
+def test_session_fixture_error_is_infrastructure(tmp_path):
+    """session fixture 崩溃 = 基础设施问题，不是「跳过」。"""
+    root = _project("""\
+import pytest
+from apitest import case, expect, req
+
+
+@pytest.fixture(scope="session")
+def broken_infra():
+    raise RuntimeError("数据库连不上")
+
+
+@case(id="AUTO-021", tc="TC-21", intent="依赖崩了")
+def test_t(api, broken_infra):
+    expect(1).equal_to(1, basis=req("REQ-1", confirmed=True))
+""")
+    _, doc = _run(root, tmp_path / "ev")
+    record = doc["executions"][0]
+
+    assert record["execution_status"] == "infrastructure_error"
+    assert "setup 阶段失败" in record["message"]
+
+
+def test_x_stop_marks_remaining_as_not_run(tmp_path):
+    """-x 之后没跑到的用例是「未运行」，不是「跳过」。"""
+    root = _project("""\
+from apitest import case, expect, req
+
+
+@case(id="AUTO-022", tc="TC-22", intent="先失败")
+def test_a(api):
+    expect(1).equal_to(2, basis=req("REQ-1", confirmed=True))
+
+
+@case(id="AUTO-023", tc="TC-23", intent="没跑到")
+def test_b(api):
+    expect(1).equal_to(1, basis=req("REQ-1", confirmed=True))
+""")
+    _, doc = _run(root, tmp_path / "ev", extra=["-x"])
+    by_id = {r["auto_id"]: r for r in doc["executions"]}
+
+    assert by_id["AUTO-022"]["execution_status"] == "failed"
+    assert by_id["AUTO-023"]["execution_status"] == "not_run"
+
+
+def test_k_deselected_cases_leave_no_trace(tmp_path):
+    """-k 排除的用例不属于本次范围，不该在证据里留缺口。"""
+    root = _project("""\
+from apitest import case, expect, req
+
+
+@case(id="AUTO-024", tc="TC-24", intent="选中的")
+def test_a(api):
+    expect(1).equal_to(1, basis=req("REQ-1", confirmed=True))
+
+
+@case(id="AUTO-025", tc="TC-25", intent="没选中的")
+def test_b(api):
+    expect(1).equal_to(1, basis=req("REQ-1", confirmed=True))
+""")
+    _, doc = _run(root, tmp_path / "ev", extra=["-k", "test_a"])
+
+    assert [r["auto_id"] for r in doc["executions"]] == ["AUTO-024"]
+
+
+# ================================================================ JUnit
+def test_cleanup_error_becomes_junit_error(tmp_path):
+    """只按 execution_status 映射的话，passed+cleanup_error 会输出成通过，
+    消费方归一化成 passed 后与真实退出码对不上。"""
+    import xml.etree.ElementTree as ET
+
+    root = _project("""\
+import pytest
+from apitest import case, expect, req
+
+
+@pytest.fixture
+def broken():
+    yield 1
+    raise RuntimeError("清理炸了")
+
+
+@case(id="AUTO-026", tc="TC-26", intent="清理失败")
+def test_t(api, broken):
+    expect(1).equal_to(1, basis=req("REQ-1", confirmed=True))
+""")
+    evidence = tmp_path / "ev"
+    _run(root, evidence)
+
+    root_el = ET.parse(evidence / "junit.xml").getroot()
+    case_el = root_el.find(".//testcase")
+    assert case_el[0].tag == "error"
+    assert "清理炸了" in (case_el[0].get("message") or "")
+    assert root_el.get("errors") == "1"
+
+
+# ================================================================ 断言 ID
+def test_assertion_ids_reset_per_case(tmp_path):
+    """ID 随执行范围漂移，跨运行就没法对齐。"""
+    body = """\
+from apitest import case, expect, req
+
+
+@case(id="AUTO-027", tc="TC-27", intent="第一条")
+def test_a(api):
+    expect(1).equal_to(1, basis=req("REQ-1", confirmed=True))
+    expect(2).equal_to(2, basis=req("REQ-1", confirmed=True))
+
+
+@case(id="AUTO-028", tc="TC-28", intent="第二条")
+def test_b(api):
+    expect(3).equal_to(3, basis=req("REQ-1", confirmed=True))
+"""
+    root = _project(body)
+    _, group = _run(root, tmp_path / "group")
+
+    alone_root = _project(body)
+    _, alone = _run(alone_root, tmp_path / "alone", extra=["-k", "test_b"])
+
+    group_ids = {r["auto_id"]: [a["id"] for a in r["assertions"]]
+                 for r in group["executions"]}
+    alone_ids = {r["auto_id"]: [a["id"] for a in r["assertions"]]
+                 for r in alone["executions"]}
+
+    assert group_ids["AUTO-028"] == alone_ids["AUTO-028"] == ["AS-0001"]
+    assert group_ids["AUTO-027"] == ["AS-0001", "AS-0002"]
+
+
+# ================================================================ 直接构造客户端
+def test_api_client_registers_secrets_without_plugin(tmp_path):
+    """不走 pytest 插件直接构造 APIClient 时，auth 头也必须脱敏。"""
+    import httpx
+
+    from apitest.client import APIClient
+    from apitest.config import EnvironmentConfig
+
+    config = """\
+project: {id: demo}
+default_environment: local
+environments:
+  local:
+    base_url: "http://127.0.0.1:1"
+    auth:
+      type: api_key
+      key_env: FAKE_SECRET_DIRECT
+      key_header: X-Direct-Key
+      key_query: api_key
+"""
+    os.environ["FAKE_SECRET_DIRECT"] = "direct-secret"
+    path = tmp_path / "apitest.yaml"
+    path.write_text(config, encoding="utf-8")
+
+    from apitest.config import load_config
+
+    project = load_config(path)
+    env = project.environments["local"]
+
+    client = httpx.Client(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"ok": True})))
+
+    from apitest.context import bind, unbind
+
+    ctx = CaseContext(auto_id="AUTO-029", evidence_dir=tmp_path / "ev", tc="TC-29")
+    bind(ctx)
+    try:
+        api = APIClient(env, client=client)
+        api.get("/x", params={"api_key": "direct-secret"})
+        api.close()
+    finally:
+        unbind()
+
+    attachments = list((tmp_path / "ev/attachments").rglob("requests/*.json"))
+    assert attachments, "请求必须真的发出去"
+    for path_obj in attachments:
+        assert "direct-secret" not in path_obj.read_text(encoding="utf-8"), \
+            "未走插件时凭据泄漏"

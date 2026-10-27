@@ -203,10 +203,37 @@ CK 的金额是 `Decimal`、PG 的 `numeric`/`timestamp` 同理。不做这一�
 - `@pytest.mark.skip` 的用例 fixture 不执行，必须在**收集阶段**登记；
   没有这条，这类用例在证据里彻底消失，整包甚至不会生成
 - 用例内 `pytest.skip()` 覆盖已通过的断言状态：没验完就是没验完
+- **setup 阶段的 skip 同理**：fixture 里先记了断言再 skip，正文根本没跑
+
+「收集到但没有执行记录」必须按真实结局分类，不能一律补成 skipped：
+
+| 情况 | 状态 |
+|---|---|
+| setup 阶段失败（session fixture 崩溃等） | `infrastructure_error` |
+| setup / call 阶段 skip | `skipped` |
+| 有 collected 但完全没有报告（`-x` 提前停止） | `not_run` |
+| 被 `-k` / `-m` 排除 | 不留痕（不属本次范围） |
+
+断言 ID 按用例重置（`AS-0001` 起）。用类级全局计数器时，同一条用例整组跑
+是 `AS-0002`、单独跑是 `AS-0001` —— 证据里的 ID 随执行范围漂移，跨运行
+就没法对齐。
 
 ### C4 校验和有效
 
 `manifest.json.files` 中每个文件的 sha256 与实际内容一致。
+
+### C4.2 JUnit 必须反映清理失败
+
+`execution_status=passed` + `cleanup_error` 时，JUnit 要输出 `<error>`。
+只按状态映射的话会输出一条通过的 testcase，消费方（riqor）归一化成
+`passed`，随后与真实退出码对不上，整批结果被拒。
+
+实测消费结果：
+
+```text
+AUTO-001  passed
+AUTO-002  infrastructure_error   detail: teardown 阶段失败 — RuntimeError: ...
+```
 
 ### C4.5 必需文件齐全
 

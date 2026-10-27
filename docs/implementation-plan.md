@@ -34,6 +34,9 @@
 | 凭据脱敏（自定义认证位置） | `context.py`、`pytest_plugin.py` | `tests/test_lifecycle.py` |
 | 证据校验接入消费入口 | `runner/cli.py`、`evidence/bundle.py` | `tests/test_lifecycle.py` |
 | 运行目录唯一化与拒绝复用 | `runner/pytest_plugin.py` | `tests/test_lifecycle.py` |
+| 缺失记录按结局分类（infra / not_run / 未选中） | `runner/pytest_plugin.py` | `tests/test_lifecycle.py` |
+| JUnit 反映清理失败 | `evidence/bundle.py` | `tests/test_lifecycle.py` |
+| 断言 ID 按用例重置 | `context.py`、`expect/__init__.py` | `tests/test_lifecycle.py` |
 | HTML 报告三层 + 主题可复制 | `report/` | 同上 |
 | CLI：init / scaffold / verify / run / check / render | `runner/cli.py` | 手工 + 示例 |
 

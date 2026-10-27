@@ -122,6 +122,21 @@ COMPARATORS: dict[str, Comparator] = {
 
 
 # ---------------------------------------------------------------- 断言对象
+def _next_assertion_id() -> str:
+    """优先由当前用例的上下文分配，没有上下文才退回模块级计数器。
+
+    模块级计数器只是兜底（例如框架自测里直接构造 expect）—— 它不跨用例重置，
+    会让同一断言在整组执行与单独执行时拿到不同 ID。
+    """
+    from apitest.context import current_context
+
+    ctx = current_context()
+    if ctx is not None:
+        return ctx.next_assertion_id()
+    Assertion._counter += 1
+    return f"AS-{Assertion._counter:04d}"
+
+
 class Assertion:
     """``expect(actual)`` 的返回值，链式调用一次即产生一条断言记录。"""
 
@@ -154,9 +169,9 @@ class Assertion:
         ok, message = comparator(actual, expected, options)
         used_basis = basis or OBSERVED
 
-        Assertion._counter += 1
+        assertion_id = _next_assertion_id()
         record = AssertionRecord(
-            id=f"AS-{Assertion._counter:04d}",
+            id=assertion_id,
             kind=kind,
             intent=intent or reason,
             expected=expected,

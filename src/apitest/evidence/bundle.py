@@ -68,9 +68,16 @@ def build_junit(document: EvidenceDocument) -> str:
                if _JUNIT_ELEMENT.get(r.execution_status.value) != "ignore"
                and r.execution_status is not ExecutionStatus.NOT_RUN]
 
-    failures = sum(1 for r in counted if r.execution_status is ExecutionStatus.FAILED)
-    errors = sum(1 for r in counted
-                 if r.execution_status is ExecutionStatus.INFRASTRUCTURE_ERROR)
+    def _element(record: Any) -> str | None:
+        """JUnit 元素。清理失败优先 —— 只按 execution_status 映射的话，
+        passed + cleanup_error 会输出一条通过的 testcase，消费方（riqor）
+        归一化成 passed 后，与真实退出码对不上。"""
+        if record.cleanup_error:
+            return "error"
+        return _JUNIT_ELEMENT.get(record.execution_status.value)
+
+    failures = sum(1 for r in counted if _element(r) == "failure")
+    errors = sum(1 for r in counted if _element(r) == "error")
     skipped = sum(1 for r in counted
                   if r.execution_status in (ExecutionStatus.SKIPPED,
                                             ExecutionStatus.BLOCKED))
@@ -86,7 +93,7 @@ def build_junit(document: EvidenceDocument) -> str:
         f'timestamp={quoteattr(document.meta.started_at or "")}>')
 
     for record in counted:
-        element = _JUNIT_ELEMENT.get(record.execution_status.value)
+        element = _element(record)
         lines.append(
             f'    <testcase classname={quoteattr(record.nodeid or record.auto_id)} '
             f'name={quoteattr(_testcase_name(record))} '
@@ -98,7 +105,8 @@ def build_junit(document: EvidenceDocument) -> str:
             lines.append(f'      <failure message={quoteattr(message)}>'
                          f'{escape(record.message or message)}</failure>')
         elif element == "error":
-            lines.append(f'      <error message={quoteattr(record.message or "基础设施错误")}/>')
+            detail = record.cleanup_error or record.message or "基础设施错误"
+            lines.append(f'      <error message={quoteattr(detail)}/>')
         elif element == "skipped":
             prefix = "blocked" if record.execution_status is ExecutionStatus.BLOCKED else "skipped"
             lines.append(

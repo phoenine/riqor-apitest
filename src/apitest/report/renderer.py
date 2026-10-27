@@ -88,6 +88,8 @@ def _execution_view(record: Any) -> dict[str, Any]:
     return {
         "auto_id": record.auto_id,
         "tc": record.tc,
+        "cleanup_error": record.cleanup_error,
+        "error_type": record.error_type,
         "tp": record.tp,
         "intent": record.intent,
         "nodeid": record.nodeid,
