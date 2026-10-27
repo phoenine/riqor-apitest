@@ -21,6 +21,13 @@
   h3 { font-size: 14px; margin: 24px 0 8px; }
   .meta { color: var(--muted); font-size: 13px; }
   .meta code { background: var(--soft); padding: 1px 5px; border-radius: 4px; }
+  /* 执行上下文：标签与值成对排列，不用「·」串成一长行 */
+  .meta-bar { display: flex; flex-wrap: wrap; gap: 6px 22px; align-items: baseline;
+              margin: 4px 0 0; padding: 10px 14px; background: var(--soft);
+              border-radius: 8px; font-size: 12px; }
+  .meta-bar > div { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+  .meta-bar dt { color: var(--muted); }
+  .meta-bar dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 16px 0; }
   .card { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
@@ -92,13 +99,15 @@
 <main>
 
   <h1>{{ title }}</h1>
-  <p class="meta">
-    项目 <code>{{ meta.project_id }}</code> ·
-    环境 <code>{{ meta.environment }}</code> ·
-    地址 <code>{{ meta.base_url }}</code> ·
-    执行 <code>{{ meta.execution_id }}</code>
-    {% if meta.exit_code is not none %} · 退出码 <code>{{ meta.exit_code }}</code>{% endif %}
-  </p>
+  <dl class="meta-bar">
+    <div><dt>项目</dt><dd class="mono">{{ meta.project_id }}</dd></div>
+    <div><dt>环境</dt><dd class="mono">{{ meta.environment }}</dd></div>
+    <div><dt>地址</dt><dd class="mono">{{ meta.base_url }}</dd></div>
+    <div><dt>执行</dt><dd class="mono">{{ meta.execution_id }}</dd></div>
+    {% if meta.exit_code is not none %}
+    <div><dt>退出码</dt><dd class="mono">{{ meta.exit_code }}</dd></div>
+    {% endif %}
+  </dl>
 
   <!-- ============================================ 第一层：摘要 -->
   <h2>摘要</h2>
