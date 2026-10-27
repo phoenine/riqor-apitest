@@ -39,7 +39,7 @@ measured("2026-10-26")                            # 某天实测，只能说明"
 |---|---|---|
 | 1 | 来源类别（req/schema/ref/measured/observed） | 你声明 |
 | 2 | 引用可定位（能不能解析到具体条目） | 框架自动查 |
-| 3 | **依据已确认**（该来源确实支持这个期望） | **你显式写 `confirmed=True`** |
+| 3 | **依据已确认**（该来源确实支持这个期望） | **你显式写 `confirmed=True`**（同时意味着引用能找到） |
 | 4 | 执行结果（passed/failed/error/skipped/not_reached） | 框架 |
 | 5 | 负对照结果（killed/survived/...） | 离线检查 |
 
@@ -180,6 +180,9 @@ expect(payload["page"]).equal_to(1, basis=req("REQ-1", confirmed=True),
 - 一个断言的结论不影响覆盖判定：**失败了也算覆盖了**（结论记 fail），
   但 `not_reached`（根本没跑到）不算覆盖
 - 覆盖按「项」累计：两条用例各覆盖一半，合起来就是完整覆盖
+- **参数化的每个实例都要跑到**。`@pytest.mark.parametrize` 的三个参数
+  只跑了两个，该 TC 显示「部分验证」——实例证据是分开存的，缺一个就是缺证据。
+  若计划只要求任一实例（`instance_policy: any`），在 plan.yaml 里写明
 
 没有 `plan.yaml` 时，报告显示「覆盖矩阵不可计算」——不会假装完整。
 

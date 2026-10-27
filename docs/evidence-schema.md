@@ -26,9 +26,10 @@ outputs/runs/<execution_id>/
 ├── manifest.json           元信息、校验和、一致性结论
 └── attachments/
     └── <auto_id>/
-        ├── requests/<request_id>.json
-        ├── queries/<query_id>.json
-        └── refs/<ref_id>.json
+        └── [<实例 ID>/]            参数化用例必须按实例隔离，否则互相覆盖
+            ├── requests/<request_id>.json
+            ├── queries/<query_id>.json
+            └── refs/<ref_id>.json
 ```
 
 | 文件 | 必需 | 消费者 | 说明 |
@@ -104,20 +105,21 @@ riqor 侧聚合时：`status=passed` 但 `verdict=invalid` 的实例
 ### C1 三件描述同一批实例
 
 ```text
-{AUTO} = set(execution.json.executions where status != not_run 的 auto_id)
-       == set(junit.xml 每个 testcase name 用 AUTO-\d+ 提取出的编号)
-       == set(case-inventory.yaml cases[].id
-              where 该 case 的 instances 里存在 status != not_run)
+{(AUTO, 参数实例)} = execution.json.executions where status != not_run
+                   == junit.xml 的 testcase name（AUTO-001[case-a] 或 AUTO-001）
+                   == case-inventory.yaml 里每个 AUTO 的 instances 展开
+且每个二元组在两个来源里的**状态必须相同**
 ```
 
-**按 AUTO 层面比较，不是按实例名**。原因：消费方要求 `cases[].id` 唯一，
-参数实例折叠在同一条 case 定义的 `instances` 里；而 JUnit 里每个实例一条
-testcase（`AUTO-001[case-a]`），消费方用 `AUTO-\d+` 正则归组。
+**按 (AUTO, 实例) 二元组比较，不是只比 AUTO**。只比 AUTO 会漏掉
+「把实例 b 改成 a」这类错配 —— 而报告里的证据链接正是指向实例级的，
+错配后链接会指向另一组参数的结果。
 
-因此 C1 还要额外检查两件事：
+同时检查：
 
-- `cases[].id` 无重复（否则消费方报 `duplicate case definition`）
-- JUnit testcase 总数 == `execution.json` 里非 `not_run` 的实例数
+- 二元组无重复（消费方要求 `cases[].id` 唯一，重复即报
+  `duplicate case definition`）
+- 每条用例的 `instances` 完整参与校验，不能只对 `id` 做集合比较
 
 `case-inventory.yaml` **保留**只有 `not_run` 实例的 AUTO（消费方靠它报
 `not_run`），但不参与集合比较——它在 JUnit 里没有对应 testcase。

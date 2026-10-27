@@ -48,17 +48,12 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _instance_key(record: ExecutionRecord) -> tuple[str, str]:
-    """(auto_id, 参数实例) —— 参数化用例必须按二元组区分，否则会互相覆盖。"""
+def _testcase_name(record: ExecutionRecord) -> str:
+    """JUnit testcase 名：``AUTO-001[case-a]``；消费方用 ``AUTO-\\d+`` 归组。"""
     instance = ""
     if record.param_instance:
         instance = str(record.param_instance.get("id", ""))
-    return record.auto_id, instance
-
-
-def _testcase_name(record: ExecutionRecord) -> str:
-    auto_id, instance = _instance_key(record)
-    return f"{auto_id}[{instance}]" if instance else auto_id
+    return _instance_key(record.auto_id, instance)
 
 
 # ---------------------------------------------------------------- junit
@@ -170,38 +165,108 @@ def build_inventory(document: EvidenceDocument) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------- 一致性
-def check_consistency(document: EvidenceDocument, junit_ids: set[str],
-                      inventory_cases: list[dict[str, Any]]) -> dict[str, Any]:
-    """C1：三件描述同一批实例。不一致直接报错，不静默取其一。
+def _instance_key(auto_id: str, instance: str) -> str:
+    return f"{auto_id}[{instance}]" if instance else auto_id
 
-    ``not_run`` 的实例在 inventory 里**保留**（它确实被选中了，只是没跑），
-    但 JUnit 不写 testcase。所以比较时三方都排除 ``not_run``。
+
+def _parse_junit_instances(xml_text: str) -> dict[str, str]:
+    """从 JUnit 解析 ``{AUTO[实例] → 状态}``。
+
+    用 XML 解析而不是正则：要区分 ``<failure>`` / ``<error>`` / ``<skipped>``，
+    还要读 ``message`` 前缀来分辨 blocked 与 skipped。
     """
-    # 对齐到 AUTO 层面：参数实例折叠在一条 case 定义下，JUnit 里仍是多条
+    from xml.etree import ElementTree
+
+    try:
+        root = ElementTree.fromstring(xml_text)
+    except ElementTree.ParseError as exc:
+        raise EvidenceConsistencyError(f"junit.xml 无法解析：{exc}") from exc
+
+    found: dict[str, str] = {}
+    for testcase in root.iter("testcase"):
+        name = testcase.get("name", "")
+        if not name:
+            continue
+        if testcase.find("failure") is not None:
+            status = "failed"
+        elif testcase.find("error") is not None:
+            status = "infrastructure_error"
+        else:
+            skipped = testcase.find("skipped")
+            if skipped is not None:
+                message = (skipped.get("message") or "").lower()
+                status = "blocked" if message.startswith("blocked") else "skipped"
+            else:
+                status = "passed"
+        if name in found:
+            raise EvidenceConsistencyError(f"junit.xml 里 {name} 重复出现")
+        found[name] = status
+    return found
+
+
+def check_consistency(document: EvidenceDocument,
+                      junit_instances: dict[str, str],
+                      inventory_cases: list[dict[str, Any]]) -> dict[str, Any]:
+    """C1：三件描述同一批实例，且**逐项状态一致**。
+
+    比较粒度是 ``(AUTO, 参数实例)``，不是 AUTO —— 只比 AUTO 会漏掉
+    「把实例 b 改成 a」这类错配，而报告里的证据链接正是指向实例级的。
+    """
     ran = [r for r in document.executions
            if r.execution_status is not ExecutionStatus.NOT_RUN]
-    expected = {r.auto_id for r in ran}
-    # 只有 not_run 实例的 AUTO 保留在 inventory 里（消费方靠它报 not_run），
-    # 但不参与 JUnit 集合比较
-    inventory_ids = {
-        item["id"] for item in inventory_cases
-        if any(i.get("execution_status") != "not_run" for i in item.get("instances", []))
-    }
+
+    expected: dict[str, str] = {}
+    duplicated: list[str] = []
+    for record in ran:
+        instance = ""
+        if record.param_instance:
+            instance = str(record.param_instance.get("id", ""))
+        key = _instance_key(record.auto_id, instance)
+        if key in expected:
+            duplicated.append(key)
+        expected[key] = record.execution_status.value
+
+    inventory: dict[str, str] = {}
+    for item in inventory_cases:
+        for instance in item.get("instances", []):
+            status = instance.get("execution_status", "")
+            if status == "not_run":
+                continue
+            key = _instance_key(item["id"], str(instance.get("instance", "")))
+            if key in inventory:
+                duplicated.append(key)
+            inventory[key] = status
 
     problems: list[str] = []
-    all_ids = [item["id"] for item in inventory_cases]
-    if len(set(all_ids)) != len(all_ids):
-        problems.append("case-inventory 里存在重复的 AUTO 定义，消费方会报错")
-    if expected != junit_ids:
+    if duplicated:
+        problems.append(f"实例定义重复：{sorted(set(duplicated))}")
+
+    if expected.keys() != junit_instances.keys():
+        only_junit = sorted(junit_instances.keys() - expected.keys())
+        only_json = sorted(expected.keys() - junit_instances.keys())
         problems.append(
             f"junit 实例集合与 execution.json 不一致："
-            f"仅 junit 有 {sorted(junit_ids - expected)}；"
-            f"仅 json 有 {sorted(expected - junit_ids)}")
-    if expected != inventory_ids:
+            f"仅 junit 有 {only_junit}；仅 json 有 {only_json}")
+
+    if expected != inventory:
+        mismatch = {
+            key: (expected[key], inventory.get(key))
+            for key in expected.keys() & inventory.keys()
+            if expected[key] != inventory[key]
+        }
         problems.append(
-            f"inventory 实例集合与 execution.json 不一致："
-            f"仅 inventory 有 {sorted(inventory_ids - expected)}；"
-            f"无 {sorted(expected - inventory_ids)}")
+            f"inventory 与 execution.json 的实例/状态不一致："
+            f"状态差异 {mismatch}；"
+            f"仅 inventory 有 {sorted(inventory.keys() - expected.keys())}")
+
+    # 逐项状态：execution.json 与 JUnit 对同一实例必须给出同一状态
+    status_diff = {
+        key: (expected[key], junit_instances[key])
+        for key in expected.keys() & junit_instances.keys()
+        if expected[key] != junit_instances[key]
+    }
+    if status_diff:
+        problems.append(f"实例状态不一致（execution vs junit）：{status_diff}")
 
     if problems:
         raise EvidenceConsistencyError("；".join(problems))
@@ -209,27 +274,11 @@ def check_consistency(document: EvidenceDocument, junit_ids: set[str],
     return {
         "execution_vs_junit": "ok",
         "execution_vs_inventory": "ok",
-        "auto_cases": len(expected),
-        "instances": len(ran),
+        "auto_cases": len({key.split("[")[0] for key in expected}),
+        "instances": len(expected),
         "excluded_not_run": sum(1 for r in document.executions
                                 if r.execution_status is ExecutionStatus.NOT_RUN),
     }
-
-
-_AUTO_RE = __import__("re").compile(r"AUTO-\d+")
-
-
-def _parse_junit_cases(xml_text: str) -> tuple[set[str], int]:
-    """返回 (AUTO 集合, testcase 总数)。
-
-    JUnit 的 name 可能是 ``AUTO-001[case-a]``；消费方用 ``AUTO-\\d+``
-    正则归组，所以这里也对齐到 AUTO 层面比较。
-    """
-    import re
-
-    names = re.findall(r'<testcase\b[^>]*\bname="([^"]*)"', xml_text)
-    ids = {match.group(0) for name in names if (match := _AUTO_RE.search(name))}
-    return ids, len(names)
 
 
 # ---------------------------------------------------------------- 主入口
@@ -255,9 +304,9 @@ def write_bundle(document: EvidenceDocument, evidence_dir: Path,
     for name, content in (extra_files or {}).items():
         (evidence_dir / name).write_text(content, encoding="utf-8")
 
-    junit_ids, junit_count = _parse_junit_cases(junit_text)
-    consistency = check_consistency(document, junit_ids, inventory["cases"])
-    consistency["junit_testcase_count"] = junit_count
+    junit_instances = _parse_junit_instances(junit_text)
+    consistency = check_consistency(document, junit_instances, inventory["cases"])
+    consistency["junit_testcase_count"] = len(junit_instances)
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -347,15 +396,20 @@ def verify_bundle(evidence_dir: Path) -> list[str]:
 
         junit = evidence_dir / "junit.xml"
         if junit.is_file():
-            junit_ids, junit_count = _parse_junit_cases(junit.read_text(encoding="utf-8"))
+            junit_instances = _parse_junit_instances(
+                junit.read_text(encoding="utf-8"))
             ran = [r for r in document.executions
                    if r.execution_status is not ExecutionStatus.NOT_RUN]
-            if {r.auto_id for r in ran} != junit_ids:
-                problems.append("junit.xml 与 execution.json 的实例集合不一致")
-            if junit_count != len(ran):
+            expected = {}
+            for record in ran:
+                instance = ""
+                if record.param_instance:
+                    instance = str(record.param_instance.get("id", ""))
+                expected[_instance_key(record.auto_id, instance)] = \
+                    record.execution_status.value
+            if expected != junit_instances:
                 problems.append(
-                    f"junit.xml 有 {junit_count} 条 testcase，"
-                    f"execution.json 有 {len(ran)} 个已执行实例")
+                    "junit.xml 与 execution.json 的实例集合或状态不一致")
 
     return problems
 

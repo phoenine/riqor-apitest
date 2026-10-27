@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -59,6 +59,9 @@ class PlannedCase(BaseModel):
     title: str = ""
     #: 该 TC 必须覆盖的验证项（用于判定「部分验证」）
     required_assertions: list[RequiredAssertion] = Field(default_factory=list)
+    #: 参数实例要求。all（默认）= 每个参数实例都要跑到；
+    #: any = 任一实例通过即可（需要计划显式声明，不能默认）
+    instance_policy: Literal["all", "any"] = "all"
     waived: Waiver | None = None
 
     @model_validator(mode="before")
@@ -237,6 +240,26 @@ def evaluate_case(case: PlannedCase,
             "note": "有用例，本次未执行",
         }
 
+    # 参数实例覆盖：默认要求每个实例都跑到，否则不能算完整验证。
+    # 报告只看 verdict 会隐藏「a 通过、b 跳过」——那是一个未验证的参数。
+    if case.instance_policy == "all":
+        unexecuted = [
+            (r.param_instance or {}).get("id") or r.auto_id
+            for r in record_list
+            if r.execution_status in {ExecutionStatus.SKIPPED,
+                                      ExecutionStatus.NOT_RUN,
+                                      ExecutionStatus.INFRASTRUCTURE_ERROR}
+        ]
+        if unexecuted:
+            return {
+                "tc": case.id, "title": case.title,
+                "state": CoverageState.PARTIAL.value, "verdict": verdict,
+                "executions": record_list,
+                "uncovered": _uncovered(case, record_list),
+                "waived": case.waived.model_dump() if case.waived else None,
+                "note": f"缺必要参数实例：{', '.join(str(i) for i in unexecuted)}",
+            }
+
     if verdict is None:
         # 该 TC 下没有任何实例得出验证结论（全部 blocked 且前提无问题）
         return {
@@ -268,9 +291,11 @@ def evaluate_case(case: PlannedCase,
             "note": "必需验证点未全部覆盖",
         }
 
+    # 依据有效性只看 basis —— a.verified 还要求断言 passed，
+    # 用它判断会把「断言失败」误报成「依据未确认」。
     unconfirmed = [
         f"{r.auto_id}/{a.id}" for r in record_list for a in r.assertions
-        if not a.verified
+        if not a.basis.verified
     ]
     if unconfirmed:
         return {

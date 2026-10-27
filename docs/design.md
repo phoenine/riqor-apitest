@@ -68,7 +68,7 @@ is_status                     HTTP 状态码
 | # | 维度 | 取值 | 谁判定 |
 |---|---|---|---|
 | 1 | 来源类别 | `req` / `schema` / `ref` / `measured` / `observed` / `none` | 用例声明 |
-| 2 | 引用可定位 | 引用能否解析到具体条目 | **框架自动**（格式 + 存在性） |
+| 2 | 引用可定位 | 引用能否解析到具体条目，**必须是明确的 True** | 框架自动（`ref` 试导入、`schema` 试解析、`req` 随 confirmed 一起声明） |
 | 3 | 依据已确认 | 该来源确实支持这个期望 | **人 / Agent 显式确认**，不可自动推导 |
 | 4 | 执行结果 | `passed` / `failed` / `error` / `skipped` / `not_reached` | 框架 |
 | 5 | 负对照结果 | `killed` / `survived` / `unsupported` / `error` / `not_run` | 离线检查 |
@@ -76,7 +76,7 @@ is_status                     HTTP 状态码
 由此派生三个不同强度的结论，报告必须分开统计：
 
 ```text
-已验证            1∈{req,schema,ref} ∧ 2 ∧ 3 ∧ 4=passed
+已验证            1∈{req,schema,ref} ∧ 2（locatable is True）∧ 3 ∧ 4=passed
 已证实且抗变异      上述 ∧ 5=killed
 仅声明来源         1∈{req,schema,ref} 但 3 未确认   → 不算已验证
 仅观察             1∈{measured,observed,none}       → 不算已验证
@@ -343,6 +343,10 @@ apitest init / scaffold / verify / run / check / render
 - **按「验证项」汇总，不是按「用例」取最弱**：两条用例各自覆盖一半，
   合起来是完整覆盖 —— 逐用例取最弱会把完整覆盖误判成部分验证
 - 覆盖 = 「验了」，失败也覆盖（结论记 fail）；但 `not_reached` 不算覆盖
+- **参数实例默认全部要跑到**（`instance_policy: all`）：`a` 通过、`b` 跳过
+  只能算部分验证。计划显式写 `instance_policy: any` 才放宽
+- 依据是否有效只看 `basis.verified`，不看断言结果 —— 否则「断言失败」
+  会被误报成「依据未确认」
 - 没有任何实例得出验证结论时（如全部 blocked），覆盖状态记 `not_run`，
   不得判 `verified`
 

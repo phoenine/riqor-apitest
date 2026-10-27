@@ -154,6 +154,7 @@ def _apitest_case(request: pytest.FixtureRequest) -> Iterator[None]:
         return
 
     evidence_dir: Path = request.getfixturevalue("apitest_evidence_dir")
+    param_instance = _param_instance(request.node)
     started = time.perf_counter()
     with case_context(
         auto_id=meta.auto_id,
@@ -162,6 +163,7 @@ def _apitest_case(request: pytest.FixtureRequest) -> Iterator[None]:
         tp=meta.tp,
         intent=meta.intent,
         nodeid=request.node.nodeid,
+        param_instance=param_instance,
     ) as ctx:
         # makereport 阶段（call 失败时）需要读它来记录异常类型
         request.node._apitest_ctx = ctx      # noqa: SLF001
@@ -173,6 +175,21 @@ def _apitest_case(request: pytest.FixtureRequest) -> Iterator[None]:
             if ctx.execution_status is ExecutionStatus.PASSED and not ctx.assertions:
                 ctx.mark(ExecutionStatus.BLOCKED,
                          "用例结束时没有任何断言，未验证任何内容")
+
+
+def _param_instance(node: pytest.Node) -> dict[str, Any] | None:
+    """从 pytest 的 callspec 取出参数实例身份。
+
+    没有它，``@pytest.mark.parametrize`` 的多个实例会共用同一个 auto_id、
+    写到同一个附件目录，最终只剩最后一组证据。
+    """
+    callspec = getattr(node, "callspec", None)
+    if callspec is None:
+        return None
+    return {
+        "id": str(callspec.id),
+        "params": {name: repr(value)[:120] for name, value in callspec.params.items()},
+    }
 
 
 # ---------------------------------------------------------------- 异常捕获

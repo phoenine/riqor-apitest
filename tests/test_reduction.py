@@ -17,7 +17,7 @@ from apitest.evidence.models import (
 
 
 def _assertion(result: str = "passed", confirmed: bool = True,
-               locatable: bool | None = None, passed: bool = True) -> AssertionRecord:
+               locatable: bool | None = True, passed: bool = True) -> AssertionRecord:
     return AssertionRecord(
         id="AS-0001", kind="equal_to", expected=1, actual=1,
         basis=BasisRecord(kind="req", ref="REQ-1", confirmed=confirmed,
@@ -44,10 +44,14 @@ def test_unlocatable_reference_is_not_verified():
     assert _record(assertions=[assertion]).verdict is Verdict.INVALID
 
 
-def test_locatable_unknown_still_allowed():
-    """locatable=None 表示尚未检查，不因此判负（向后兼容）。"""
+def test_locatable_unknown_is_not_verified():
+    """locatable=None 是「尚未核查」，不能算已验证。
+
+    否则「没查」与「查过没问题」在报告里长得一样。
+    """
     assertion = _assertion(confirmed=True, locatable=None)
-    assert assertion.verified is True
+    assert assertion.verified is False
+    assert _record(assertions=[assertion]).verdict is Verdict.INVALID
 
 
 # ---------------------------------------------------------------- 断言执行结果

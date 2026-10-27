@@ -163,7 +163,7 @@ def _assertion(kind="equal_to", verified=True, check="not_run") -> AssertionReco
     return AssertionRecord(
         id="AS-0001", kind=kind, expected=1, actual=1,
         basis=BasisRecord(kind="req" if verified else "observed", ref="REQ-1",
-                          confirmed=verified),
+                          confirmed=verified, locatable=verified),
         passed=True, check=check,
     )
 
@@ -193,7 +193,7 @@ def test_greater_than_zero_can_be_fully_verified():
     """
     assertion = AssertionRecord(
         id="AS-0001", kind="greater_than", expected=0, actual=3,
-        basis=BasisRecord(kind="req", ref="REQ-111", confirmed=True),
+        basis=BasisRecord(kind="req", ref="REQ-111", confirmed=True, locatable=True),
         passed=True)
     assert assertion.verified is True
     assert _record(verdict_assertions=[assertion]).verdict is Verdict.PASS

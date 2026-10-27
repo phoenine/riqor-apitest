@@ -83,6 +83,15 @@ class CaseContext:
     duration_s: float = 0.0
     error_type: str | None = None
     cleanup_error: str | None = None
+    #: 参数化实例身份 {id, params}；非参数化用例为 None
+    param_instance: dict[str, Any] | None = None
+
+    @property
+    def instance_id(self) -> str | None:
+        """附件子目录名。参数实例必须隔离，否则 a/b 两组证据互相覆盖。"""
+        if not self.param_instance:
+            return None
+        return str(self.param_instance.get("id") or "instance")
 
     assertions: list[AssertionRecord] = field(default_factory=list)
     preconditions: list[PreconditionRecord] = field(default_factory=list)
@@ -94,8 +103,11 @@ class CaseContext:
         return f"{prefix}-{self._counters[prefix]:03d}"
 
     def _write_attachment(self, folder: str, item_id: str, payload: Any) -> str:
-        # 每个用例一个子目录：ID 计数器是按用例重置的，共用一个目录会互相覆盖
-        directory = self.evidence_dir / "attachments" / self.auto_id / folder
+        # 用例 → 实例 → 类别：计数器按实例重置，不隔离就会互相覆盖
+        base = self.evidence_dir / "attachments" / self.auto_id
+        if self.instance_id:
+            base = base / self.instance_id
+        directory = base / folder
         directory.mkdir(parents=True, exist_ok=True)
         (directory / f"{item_id}.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2, default=str),
@@ -185,6 +197,7 @@ class CaseContext:
             message=self.message,
             error_type=self.error_type,
             cleanup_error=self.cleanup_error,
+            param_instance=self.param_instance,
             preconditions=list(self.preconditions),
             assertions=list(self.assertions),
         )
@@ -195,7 +208,8 @@ class CaseContext:
 @contextmanager
 def case_context(*, auto_id: str, evidence_dir: Path, tc: str | None = None,
                  tp: str | None = None, intent: str = "",
-                 nodeid: str = "") -> Iterator[CaseContext]:
+                 nodeid: str = "",
+                 param_instance: dict[str, Any] | None = None) -> Iterator[CaseContext]:
     """建立用例上下文并在退出时把结论写入 ``evidence_dir/executions.jsonl``。
 
     ``executions.jsonl`` 逐行追加，进程崩溃也能保住已完成用例的结果。
@@ -206,6 +220,7 @@ def case_context(*, auto_id: str, evidence_dir: Path, tc: str | None = None,
     ctx = CaseContext(
         auto_id=auto_id, evidence_dir=evidence_dir,
         tc=tc, tp=tp, intent=intent, nodeid=nodeid,
+        param_instance=param_instance,
     )
     token = _CURRENT.set(ctx)
     try:

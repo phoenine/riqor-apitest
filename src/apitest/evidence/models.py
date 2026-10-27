@@ -67,7 +67,7 @@ class BasisRecord(_Model):
         """
         return (self.kind in {"req", "schema", "ref"}
                 and self.confirmed
-                and self.locatable is not False)
+                and self.locatable is True)
 
     @property
     def declared_only(self) -> bool:

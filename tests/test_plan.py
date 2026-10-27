@@ -33,7 +33,8 @@ def _assertion(intent: str = "验一个字段", confirmed: bool = True,
     return AssertionRecord(
         id="AS-0001", kind="equal_to", intent=intent,
         expected=1, actual=1,
-        basis=BasisRecord(kind="req", ref="REQ-1", confirmed=confirmed),
+        basis=BasisRecord(kind="req", ref="REQ-1", confirmed=confirmed,
+                          locatable=confirmed),
         passed=passed, result=result, covers=covers or [])
 
 
@@ -233,3 +234,53 @@ def test_evaluate_case_is_pure(tmp_path):
 
     assert row["state"] == "verified"
     assert row["verdict"] == Verdict.PASS.value
+
+
+# ---------------------------------------------------------------- 实例覆盖
+def _param_exec(tc: str, instance: str, status: ExecutionStatus,
+                assertions: list[AssertionRecord]) -> ExecutionRecord:
+    record = ExecutionRecord(
+        auto_id="AUTO-001", tc=tc, intent="参数化",
+        param_instance={"id": instance, "params": {}},
+        execution_status=status, assertions=assertions)
+    record.verdict = record.derive_verdict()
+    return record
+
+
+def test_skipped_parameter_instance_blocks_verified():
+    """参数 a 通过、参数 b 跳过 → 部分验证，不能报「已验证」。
+
+    只看 verdict 会把「b 没跑」藏起来。
+    """
+    document = _doc([
+        _param_exec("TC-1", "a", ExecutionStatus.PASSED, [_assertion()]),
+        _param_exec("TC-1", "b", ExecutionStatus.SKIPPED, []),
+    ])
+    row = build_matrix(document, _plan(PlannedCase(id="TC-1")))["rows"][0]
+
+    assert row["state"] == "partial"
+    assert "b" in row["note"], "要指出缺哪个实例"
+    assert row["verdict"] == "pass", "已执行部分的结论仍然保留"
+
+
+def test_instance_policy_any_allows_partial_execution():
+    """计划显式声明 any 时，任一实例通过即可。"""
+    document = _doc([
+        _param_exec("TC-1", "a", ExecutionStatus.PASSED, [_assertion()]),
+        _param_exec("TC-1", "b", ExecutionStatus.SKIPPED, []),
+    ])
+    case = PlannedCase(id="TC-1", instance_policy="any")
+    row = build_matrix(document, _plan(case))["rows"][0]
+
+    assert row["state"] == "verified"
+
+
+def test_assertion_failure_is_not_reported_as_unconfirmed_basis():
+    """断言失败但依据已确认可定位 —— 不能报成「未确认依据」。"""
+    failing = _assertion(passed=False, result="failed")
+    document = _doc([_exec("TC-1", ExecutionStatus.FAILED, [failing])])
+    row = build_matrix(document, _plan(PlannedCase(id="TC-1")))["rows"][0]
+
+    assert row["state"] == "verified", "覆盖是完整的"
+    assert row["verdict"] == "fail", "结论是失败"
+    assert row["note"] == "", "不该再冒出依据未确认的说明"

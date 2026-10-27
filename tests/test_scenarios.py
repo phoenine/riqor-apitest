@@ -213,7 +213,7 @@ def test_d5_dropped_instance_is_rejected(tmp_path):
         document.model_dump_json(indent=2), encoding="utf-8")
 
     problems = verify_bundle(tmp_path)
-    assert any("实例集合不一致" in p for p in problems)
+    assert any("实例集合或状态不一致" in p for p in problems)
 
 
 # ---------------------------------------------------------------- D9
@@ -281,3 +281,62 @@ def test_ok(api):
 """, encoding="utf-8")
 
     assert main(["verify", "--path", str(cases)]) == 0
+
+
+# ---------------------------------------------------------------- 参数化实例
+def test_parameterised_instances_record_identity_and_isolate_attachments(tmp_path):
+    """两个参数实例必须各有身份，附件不能互相覆盖。
+
+    此前 param_instance 恒为 None、附件都写 qry-001，最终只剩最后一组证据 ——
+    报告里的链接会指向另一组参数的结果。
+    """
+    root = _project(tmp_path, """\
+import pytest
+from apitest import case, current_context, expect, req
+
+
+@case(id="AUTO-010", tc="TC-10", intent="参数化用例")
+@pytest.mark.parametrize("value", [1, 2])
+def test_param(api, value):
+    current_context().record_ref(path="refs.double", inputs={"value": value},
+                                 output=value * 2)
+    expect(value * 2).equal_to(value * 2, basis=req("REQ-10", confirmed=True))
+""")
+    evidence = tmp_path / "ev"
+    _run(root, evidence)
+
+    records = _load(evidence)["executions"]
+    assert len(records) == 2
+
+    instances = [r["param_instance"] for r in records]
+    assert all(item is not None for item in instances), "实例身份不能为空"
+    ids = {item["id"] for item in instances}
+    assert len(ids) == 2, f"两个参数实例的 ID 必须不同，实际 {ids}"
+    assert all(item["params"] for item in instances), "参数值也要记录"
+
+    # 附件按实例隔离
+    base = evidence / "attachments" / "AUTO-010"
+    ref_dirs = sorted(path.name for path in base.iterdir() if path.is_dir())
+    assert len(ref_dirs) == 2, f"每个实例一个子目录，实际 {ref_dirs}"
+    for name in ref_dirs:
+        refs = list((base / name / "refs").glob("*.json"))
+        assert len(refs) == 1, f"{name} 的参考计算证据缺失"
+
+
+def test_non_parameterised_case_keeps_flat_attachment_path(tmp_path):
+    """非参数化用例不额外套一层目录，保持旧路径。"""
+    root = _project(tmp_path, """\
+from apitest import case, current_context, expect, req
+
+
+@case(id="AUTO-011", tc="TC-11", intent="普通用例")
+def test_plain(api):
+    current_context().record_ref(path="refs.double", inputs={"value": 1}, output=2)
+    expect(2).equal_to(2, basis=req("REQ-11", confirmed=True))
+""")
+    evidence = tmp_path / "ev"
+    _run(root, evidence)
+
+    record = _load(evidence)["executions"][0]
+    assert record["param_instance"] is None
+    assert (evidence / "attachments" / "AUTO-011" / "refs").is_dir()

@@ -45,7 +45,7 @@ def riqor():
 def _assertion() -> AssertionRecord:
     return AssertionRecord(
         id="AS-0001", kind="equal_to", intent="字段正确", expected=1, actual=1,
-        basis=BasisRecord(kind="req", ref="REQ-1", confirmed=True))
+        basis=BasisRecord(kind="req", ref="REQ-1", confirmed=True, locatable=True))
 
 
 def _document() -> EvidenceDocument:

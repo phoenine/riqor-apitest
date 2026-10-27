@@ -43,8 +43,17 @@ class Basis:
 
     @property
     def verified(self) -> bool:
-        """是否构成「已验证」依据：来源可支撑 + 已确认。"""
-        return self.kind in VERIFIED_KINDS and self.confirmed
+        """是否构成「已验证」依据。
+
+        三个条件缺一不可：来源类别可支撑、**引用定位检查明确成功**
+        （``locatable is True``，不是「没检查出问题」）、依据已确认。
+
+        ``locatable=None``（尚未核查）不算通过 —— 否则「没查」和「查过没问题」
+        在报告里长得一样。
+        """
+        return (self.kind in VERIFIED_KINDS
+                and self.confirmed
+                and self.locatable is True)
 
     @property
     def declared_only(self) -> bool:
@@ -66,26 +75,58 @@ class Basis:
         return data
 
 
-def req(ref: str, rev: str | None = None, *, confirmed: bool = False) -> Basis:
-    """需求依据。``confirmed=True`` 表示已核对过该需求确实支持这个期望。"""
-    return Basis(kind="req", ref=ref, rev=rev, confirmed=confirmed)
+def req(ref: str, rev: str | None = None, *, confirmed: bool = False,
+        locatable: bool | None = None) -> Basis:
+    """需求依据。
+
+    ``confirmed=True`` 表示已核对：引用能找到 **且** 该需求支持这个期望。
+    核对本身包含定位，所以 confirmed 时 locatable 默认为 True。
+    """
+    return Basis(kind="req", ref=ref, rev=rev, confirmed=confirmed,
+                 locatable=locatable if locatable is not None else (confirmed or None))
 
 
-def schema(ref: str, rev: str | None = None, *, confirmed: bool = False) -> Basis:
-    """接口规范依据，``ref`` 形如 ``openapi#/paths/~1users/get/200``。"""
-    return Basis(kind="schema", ref=ref, rev=rev, confirmed=confirmed)
+def schema(ref: str, rev: str | None = None, *, confirmed: bool = False,
+           locatable: bool | None = None) -> Basis:
+    """接口规范依据，``ref`` 形如 ``openapi#/paths/~1users/get/200``。
+
+    定位检查是格式性的：必须有 ``#`` 指向具体字段位置。
+    """
+    inferred = bool(ref and "#" in ref)
+    return Basis(kind="schema", ref=ref, rev=rev, confirmed=confirmed,
+                 locatable=locatable if locatable is not None else inferred)
 
 
 def ref(path: str, inputs: dict[str, Any] | None = None,
-        rev: str | None = None, *, confirmed: bool = False) -> Basis:
+        rev: str | None = None, *, confirmed: bool = False,
+        locatable: bool | None = None) -> Basis:
     """参考计算依据。
 
     ``path`` 是项目中可导入的函数路径，``inputs`` 是喂给该函数的入参 ——
     拿同样的输入跑同一个函数应得到同一个期望。
 
-    ``confirmed=True`` 表示已核对过该函数实现、输入范围与版本。
+    定位检查会真的尝试解析该路径：解析不到就记 ``locatable=False``。
     """
-    return Basis(kind="ref", ref=path, rev=rev, inputs=inputs, confirmed=confirmed)
+    if locatable is None:
+        locatable = _is_importable(path)
+    return Basis(kind="ref", ref=path, rev=rev, inputs=inputs,
+                 confirmed=confirmed, locatable=locatable)
+
+
+def _is_importable(path: str) -> bool:
+    """能否解析到具体对象（模块存在 + 属性存在）。"""
+    import importlib
+
+    if not path:
+        return False
+    module_name, _, attr = path.rpartition(".")
+    if not module_name:
+        return False
+    try:
+        module = importlib.import_module(module_name)
+    except Exception:                                # noqa: BLE001
+        return False
+    return bool(attr) and hasattr(module, attr)
 
 
 def measured(on: str) -> Basis:

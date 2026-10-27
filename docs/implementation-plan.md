@@ -20,10 +20,12 @@
 | 证据包完整性校验 `verify_bundle` | `evidence/bundle.py` | `tests/test_scenarios.py` |
 | `verify` 退出码 0/1/2 区分 | `runner/cli.py` | `tests/test_scenarios.py` |
 | 确定性场景 D1/D4/D5/D8/D9 | — | `tests/test_scenarios.py` |
+| 参数实例身份 + 附件隔离 | `pytest_plugin.py`、`context.py` | `tests/test_scenarios.py` |
+| 一致性校验按实例级比较 | `evidence/bundle.py` | `tests/test_riqor_contract.py` |
 | HTML 报告三层 + 主题可复制 | `report/` | 同上 |
 | CLI：init / scaffold / verify / run / check / render | `runner/cli.py` | 手工 + 示例 |
 
-当前测试：`tests/` 98 条 + `examples/demo/` 7 条，全绿。
+当前测试：`tests/` 105 条 + `examples/demo/` 7 条，全绿。
 
 ## 未完成（按优先级）
 

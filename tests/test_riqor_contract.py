@@ -37,7 +37,8 @@ def _assertion(basis_kind: str = "req", confirmed: bool = True,
     return AssertionRecord(
         id="AS-0001", kind="equal_to", intent="验一个字段",
         expected=1, actual=1,
-        basis=BasisRecord(kind=basis_kind, ref="REQ-1", confirmed=confirmed),
+        basis=BasisRecord(kind=basis_kind, ref="REQ-1", confirmed=confirmed,
+                          locatable=confirmed),
         passed=passed,
         result="passed" if passed else "failed",
     )
@@ -225,18 +226,55 @@ def test_c5_schema_version_present_and_integer(tmp_path):
 # ---------------------------------------------------------------- 不一致必须报错
 def test_inconsistent_junit_is_rejected():
     """C1 的反向验证：junit 少一条时必须抛错，不能静默通过。"""
+    from apitest.evidence.bundle import _parse_junit_instances
+
     document = _document()
-    wrong = _junit_ids(build_junit(document)) - {"AUTO-002"}
+    instances = _parse_junit_instances(build_junit(document))
+    instances.pop("AUTO-002")
+
     with pytest.raises(EvidenceConsistencyError, match="junit 实例集合"):
-        check_consistency(document, wrong, build_inventory(document)["cases"])
+        check_consistency(document, instances, build_inventory(document)["cases"])
 
 
 def test_inconsistent_inventory_is_rejected():
-    document = _document()
-    junit_ids = _junit_ids(build_junit(document))
+    from apitest.evidence.bundle import _parse_junit_instances
 
-    with pytest.raises(EvidenceConsistencyError, match="inventory 实例集合"):
-        check_consistency(document, junit_ids, [])
+    document = _document()
+    instances = _parse_junit_instances(build_junit(document))
+
+    with pytest.raises(EvidenceConsistencyError, match="inventory"):
+        check_consistency(document, instances, [])
+
+
+def test_wrong_instance_identity_is_rejected():
+    """把实例 b 改成重复的 a —— 只比 AUTO 会漏掉这种错配。"""
+    from apitest.evidence.bundle import _parse_junit_instances, check_consistency
+
+    document = _document()
+    inventory = build_inventory(document)
+    # 篡改：把 AUTO-006 的实例名改掉，AUTO 集合不变但实例身份错了
+    for case in inventory["cases"]:
+        if case["id"] == "AUTO-006":
+            case["instances"][0]["instance"] = "swapped"
+
+    instances = _parse_junit_instances(build_junit(document))
+    with pytest.raises(EvidenceConsistencyError, match="实例/状态不一致"):
+        check_consistency(document, instances, inventory["cases"])
+
+
+def test_wrong_instance_status_is_rejected():
+    """状态被改（passed → failed）但 AUTO 与实例都不变，必须发现。"""
+    from apitest.evidence.bundle import _parse_junit_instances, check_consistency
+
+    document = _document()
+    inventory = build_inventory(document)
+    for case in inventory["cases"]:
+        if case["id"] == "AUTO-001":
+            case["instances"][0]["execution_status"] = "failed"
+
+    instances = _parse_junit_instances(build_junit(document))
+    with pytest.raises(EvidenceConsistencyError, match="实例/状态不一致"):
+        check_consistency(document, instances, inventory["cases"])
 
 
 def test_verdict_pass_and_fail_are_recorded_independently_of_status(tmp_path):
