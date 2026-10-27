@@ -127,6 +127,32 @@
     {% endfor %}
   </div>
 
+  {% if failures %}
+  <h3 class="alert-head">不通过项 · {{ failures|length }}</h3>
+  <table class="failures">
+    <thead>
+      <tr><th class="col-tc">用例</th><th class="col-fail-reason">失败原因</th><th class="num col-dur">耗时</th></tr>
+    </thead>
+    <tbody>
+      {% for row in failure_groups %}
+      <tr>
+        <td class="col-tc">
+          <span class="mono">{{ row.tc }}</span>
+          <div class="case-name">{{ row.intent }}</div>
+        </td>
+        <td class="col-fail-reason">
+          {{ row.reason }}
+          {% if row.cases|length > 1 %}
+          <div class="fail-group">同类：{% for it in row.cases %}<span class="mono">{{ it.tc }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</div>
+          {% endif %}
+        </td>
+        <td class="num col-dur mono">{{ "%.2f"|format(row.duration_s) }}s</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
   <h3>执行是否完整</h3>
   <table>
     <thead><tr><th>执行状态</th><th class="num">数量</th></tr></thead>
@@ -196,6 +222,59 @@
   <p class="meta">未执行任何实例，无通过率。</p>
   {% endif %}
 
+  {% if duration.count %}
+  <h3>耗时</h3>
+  <p>
+    {{ duration.count }} 条实例合计 <strong>{{ duration.total_s }}s</strong>。
+    接口耗时是性能信号：某个端点从零点几秒涨到数秒，下表会先露出来。
+  </p>
+  <table class="duration">
+    <thead><tr><th class="col-tc">最慢的用例</th><th class="num col-dur">耗时</th></tr></thead>
+    <tbody>
+      {% for row in duration.slowest %}
+      <tr>
+        <td class="col-tc"><span class="mono">{{ row.tc }}</span> <span class="muted">{{ row.intent }}</span></td>
+        <td class="num col-dur mono">{{ "%.2f"|format(row.duration_s) }}s</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <details class="by-file">
+    <summary>按文件分布</summary>
+    <table>
+      <thead><tr><th>文件</th><th class="num col-dur">合计</th></tr></thead>
+      <tbody>
+        {% for row in duration.files %}
+        <tr><td class="mono">{{ row.name }}</td><td class="num col-dur mono">{{ row.total_s }}s</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+
+
+
+  {% if trend.available %}
+  <h3>跨运行通过率</h3>
+  <p>
+    最近 {{ trend.points|length }} 次完整运行。各次运行仍是独立证据，这里只并排比较，
+    不做归并{% if trend.dropped %}；另有 {{ trend.dropped }} 次调试小批次未纳入{% endif %}。
+  </p>
+  <table class="trend">
+    <thead><tr><th>运行</th><th class="num">实例</th><th class="num">通过</th><th class="num col-dur">通过率</th></tr></thead>
+    <tbody>
+      {% for p in trend.points %}
+      <tr>
+        <td class="mono">{{ p.run }}</td>
+        <td class="num">{{ p.total }}</td>
+        <td class="num">{{ p.passed }}/{{ p.counted }}</td>
+        <td class="num col-dur mono">{{ "%.2f"|format(p.ratio) if p.ratio is not none else "—" }}%</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
   <!-- ============================================ 第二层：需求覆盖矩阵 -->
   <h2>需求覆盖</h2>
   {% if not matrix.computable %}
@@ -221,50 +300,58 @@
   </div>
   {% endif %}
 
-  <table class="matrix">
-    <thead>
-      <tr>
-        <th class="col-case">用例标识 / 名称</th>
-        <th class="col-state">覆盖状态</th>
-        <th class="col-verdict">验证结论</th>
-        <th class="col-auto">自动化用例</th>
-        <th class="col-note">说明</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in matrix.rows %}
-      <tr>
-        <td class="col-case">
-          {% if row.tc_url %}<a class="mono case-id case-link" href="{{ row.tc_url }}" target="_blank" rel="noopener">{{ row.tc }}</a>{% else %}<span class="mono case-id">{{ row.tc }}</span>{% endif %}
-          {% if row.title %}<div class="case-name">{{ row.title }}</div>{% endif %}
-        </td>
-        <td class="col-state"><span class="state {{ row.state }}">{{ row.state_label }}</span></td>
-        <td class="col-verdict">
-          {% if row.verdict %}
-          <span class="tag {{ row.verdict }}">{{ row.verdict_label }}</span>
-          {% else %}<span class="tag none">无结论</span>{% endif %}
-        </td>
-        <td class="mono col-auto">
-          {% for auto_id in row.execution_ids %}{{ auto_id }}{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">—</span>{% endfor %}
-        </td>
-        <td class="col-note">
-          {{ row.note }}
-          {% if row.uncovered or row.waived %}
-          <div class="uncovered">
-            <span class="uncovered-tag">未覆盖</span>
-            {% for item in row.uncovered %}
-            <div><code>{{ item.id }}</code>{% if item.text %} {{ item.text }}{% endif %}{% if not item.id_explicit %} <span class="tag observed">ID 非显式</span>{% endif %}</div>
-            {% endfor %}
-            {% if row.waived %}
-            <div class="uncovered-why">{{ row.waived.reason }}{% if row.waived.impact %} {{ row.waived.impact }}{% endif %}</div>
+  {% for group in matrix.by_file %}
+  <details class="matrix-group"{% if loop.first %} open{% endif %}>
+    <summary>
+      <span class="mono">{{ group.file }}</span>
+      <span class="muted">{{ group.count }} 个用例</span>
+    </summary>
+    <table class="matrix">
+      <thead>
+            <tr>
+              <th class="col-case">用例标识 / 名称</th>
+              <th class="col-state">覆盖状态</th>
+              <th class="col-verdict">验证结论</th>
+              <th class="col-auto">自动化用例</th>
+              <th class="col-note">说明</th>
+            </tr>
+          </thead>
+      <tbody>
+      {% for row in group.rows %}
+        <tr>
+          <td class="col-case">
+            {% if row.tc_url %}<a class="mono case-id case-link" href="{{ row.tc_url }}" target="_blank" rel="noopener">{{ row.tc }}</a>{% else %}<span class="mono case-id">{{ row.tc }}</span>{% endif %}
+            {% if row.title %}<div class="case-name">{{ row.title }}</div>{% endif %}
+          </td>
+          <td class="col-state"><span class="state {{ row.state }}">{{ row.state_label }}</span></td>
+          <td class="col-verdict">
+            {% if row.verdict %}
+            <span class="tag {{ row.verdict }}">{{ row.verdict_label }}</span>
+            {% else %}<span class="tag none">无结论</span>{% endif %}
+          </td>
+          <td class="mono col-auto">
+            {% for auto_id in row.execution_ids %}{{ auto_id }}{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">—</span>{% endfor %}
+          </td>
+          <td class="col-note">
+            {{ row.note }}
+            {% if row.uncovered or row.waived %}
+            <div class="uncovered">
+              <span class="uncovered-tag">未覆盖</span>
+              {% for gap in row.uncovered %}
+              <div><code>{{ gap.id }}</code>{% if gap.text %} {{ gap.text }}{% endif %}{% if not gap.id_explicit %} <span class="tag observed">ID 非显式</span>{% endif %}</div>
+              {% endfor %}
+              {% if row.waived %}
+              <div class="uncovered-why">{{ row.waived.reason }}{% if row.waived.impact %} {{ row.waived.impact }}{% endif %}</div>
+              {% endif %}
+            </div>
             {% endif %}
-          </div>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endfor %}
   {% endif %}
 
   {% if unlinked %}
