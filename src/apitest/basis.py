@@ -114,19 +114,22 @@ def ref(path: str, inputs: dict[str, Any] | None = None,
 
 
 def _is_importable(path: str) -> bool:
-    """能否解析到具体对象（模块存在 + 属性存在）。"""
-    import importlib
+    """能否解析到具体对象。
+
+    **必须和 ``compute()`` 用同一个解析器**。``compute`` 支持
+    ``pkg.module:func`` 和 ``pkg.module.func`` 两种写法，这里早期只认点号，
+    于是 ``compute("refs:double")`` 能跑出结果，依据却被判 locatable=False，
+    断言翻成 invalid —— 正确的东西被判成不可信。
+    """
+    from apitest.reference import resolve
 
     if not path:
         return False
-    module_name, _, attr = path.rpartition(".")
-    if not module_name:
-        return False
     try:
-        module = importlib.import_module(module_name)
-    except Exception:                                # noqa: BLE001
+        resolve(path)
+    except Exception:                                # noqa: BLE001 - 解析失败即不可定位
         return False
-    return bool(attr) and hasattr(module, attr)
+    return True
 
 
 def measured(on: str) -> Basis:

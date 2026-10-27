@@ -501,6 +501,12 @@ apitest init / scaffold / verify / run / check / render
   合起来是完整覆盖 —— 逐用例取最弱会把完整覆盖误判成部分验证
 - **豁免不是验过**。报告的「全绿」判断基于 `unverified`（= 待补 + 已豁免），
   不是 `gaps`。否则计划里唯一一条 TC 被豁免时，报告会说「全部达到已验证」
+- **blocked 也算没验**。用例跑完了但一条断言都没有 —— 它没有验证任何东西。
+  `instance_policy: all` 下「a 通过、b blocked」必须显示部分验证
+- **通过率的分子看结论，不执行状态**。两者会分叉：先过状态码断言、再因
+  数据前提不成立而结束的用例，执行状态仍是 `passed`，结论却是
+  `inconclusive`。用状态当分子就出现「无法验证但通过率 100%」。
+  分母是跑过的实例（含 inconclusive / invalid），分子只数 `verdict=pass`
 - 覆盖 = 「验了」，失败也覆盖（结论记 fail）；但 `not_reached` 不算覆盖
 - **参数实例默认全部要跑到**（`instance_policy: all`）：`a` 通过、`b` 跳过
   只能算部分验证。计划显式写 `instance_policy: any` 才放宽

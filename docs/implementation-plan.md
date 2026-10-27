@@ -37,6 +37,7 @@
 | 缺失记录按结局分类（infra / not_run / 未选中） | `runner/pytest_plugin.py` | `tests/test_lifecycle.py` |
 | JUnit 状态映射单一来源（业务失败优先） | `evidence/bundle.py` | `tests/test_lifecycle.py` |
 | 断言 ID 按用例重置 | `context.py`、`expect/__init__.py` | `tests/test_lifecycle.py` |
+| blocked 计入未验证、通过率看结论、参考路径统一解析 | `plan.py`、`models.py`、`basis.py` | `tests/test_scoring.py` |
 | HTML 报告三层 + 主题可复制 | `report/` | 同上 |
 | CLI：init / scaffold / verify / run / check / render | `runner/cli.py` | 手工 + 示例 |
 

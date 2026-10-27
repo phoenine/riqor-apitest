@@ -160,7 +160,8 @@
 
   {% if summary.pass_ratio is not none %}
   <p class="meta">
-    通过率 {{ summary.pass_ratio }}% — 分母只含真正执行过且能得出验证结论的实例；
+    通过率 {{ summary.pass_ratio }}% — 分母是跑过的实例，分子只看结论为「通过」；
+    无法验证（前提不成立）与依据不可信的实例计入分母但不算通过；
     跳过、未运行、基础设施错误与「无法验证」都不计入。
   </p>
   {% else %}

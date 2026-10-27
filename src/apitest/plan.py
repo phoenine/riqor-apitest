@@ -227,8 +227,10 @@ def evaluate_case(case: PlannedCase,
     verdicts = [r.verdict.value if r.verdict else None for r in record_list]
     verdict = _worst_verdict(verdicts)
 
+    # blocked 也是「没验出东西」：用例跑完了但一条断言都没有。
+    # 漏掉它会让「a 通过、b blocked」显示成 verified/pass。
     unexecuted = {ExecutionStatus.SKIPPED, ExecutionStatus.NOT_RUN,
-                  ExecutionStatus.INFRASTRUCTURE_ERROR}
+                  ExecutionStatus.INFRASTRUCTURE_ERROR, ExecutionStatus.BLOCKED}
 
     if all(state in unexecuted for state in states):
         return {
@@ -248,7 +250,8 @@ def evaluate_case(case: PlannedCase,
             for r in record_list
             if r.execution_status in {ExecutionStatus.SKIPPED,
                                       ExecutionStatus.NOT_RUN,
-                                      ExecutionStatus.INFRASTRUCTURE_ERROR}
+                                      ExecutionStatus.INFRASTRUCTURE_ERROR,
+                                      ExecutionStatus.BLOCKED}
         ]
         if unexecuted:
             return {

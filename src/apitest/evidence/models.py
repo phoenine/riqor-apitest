@@ -273,10 +273,19 @@ class EvidenceDocument(_Model):
         return {"verified": verified, "unverified": total - verified}
 
     def passed_ratio(self) -> float | None:
-        """通过率只统计「真正跑过」的实例，不含跳过/未运行/基础设施错误。"""
+        """通过率：跑过的实例里，结论明确为「通过」的比例。
+
+        分母是**跑过**的（passed / failed 状态）；分子必须看 ``verdict``，
+        不能看 ``execution_status``。
+
+        两者会分叉：用例先过了状态码断言，再因数据前提不成立而结束 ——
+        执行状态仍是 passed，结论却是 inconclusive。用状态当分子，
+        这种「无法验证」就被算成通过，报告显示 100%，自相矛盾。
+        """
         ran = [e for e in self.executions
-               if e.execution_status in {ExecutionStatus.PASSED, ExecutionStatus.FAILED}]
+               if e.execution_status in {ExecutionStatus.PASSED,
+                                         ExecutionStatus.FAILED}]
         if not ran:
             return None
-        ok = sum(1 for e in ran if e.execution_status == ExecutionStatus.PASSED)
+        ok = sum(1 for e in ran if e.verdict is Verdict.PASS)
         return round(ok / len(ran) * 100, 2)
