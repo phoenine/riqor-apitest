@@ -33,7 +33,8 @@
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { background: var(--soft); font-weight: 600; color: var(--muted); font-size: 12px; }
+  th { background: var(--soft); font-weight: 600; color: var(--muted); font-size: 12px;
+       white-space: nowrap; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 
@@ -64,15 +65,20 @@
   .note.ok { border-color: var(--ok); background: #f3fbf5; }
 
   .case { border: 1px solid var(--line); border-radius: 8px; margin: 12px 0; overflow: hidden; }
-  .case > header { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; background: var(--soft); flex-wrap: wrap; }
-  .case > header .id { font-weight: 600; }
-  .case > header .intent { color: var(--muted); font-size: 13px; flex: 1 1 320px; }
+  .case > summary { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px;
+                    background: var(--soft); flex-wrap: wrap; cursor: pointer; list-style: none; }
+  .case > summary::-webkit-details-marker { display: none; }
+  .case > summary::before { content: "&#9656;"; color: var(--muted); font-size: 11px; }
+  .case[open] > summary::before { content: "&#9662;"; }
+  .case > summary .id { font-weight: 600; }
+  .case > summary .intent { color: var(--muted); font-size: 13px; flex: 1 1 320px; }
   .case .body { padding: 4px 14px 12px; }
   .case pre { background: var(--soft); padding: 8px 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; }
   details summary { cursor: pointer; color: var(--info); font-size: 13px; margin: 6px 0; }
   .muted { color: var(--muted); }
   .empty { color: var(--muted); font-style: italic; }
-  @media print { body { padding: 0; } details { display: block; } }
+  @media print { body { padding: 0; } details { display: block; }
+                 .case > .body { display: block !important; } }
 </style>
 </head>
 <body>
@@ -240,14 +246,14 @@
   <!-- ============================================ 第三层：证据详情 -->
   <h2>证据详情</h2>
   {% for item in executions %}
-  <section class="case">
-    <header>
+  <details class="case">
+    <summary>
       <span class="id mono">{{ item.auto_id }}</span>
       {% if item.tc %}<span class="mono muted">{{ item.tc }}</span>{% endif %}
       <span class="intent">{{ item.intent }}</span>
       <span class="tag {{ item.verdict or 'none' }}">{{ item.verdict_label }}</span>
       <span class="muted mono">{{ item.status_label }} · {{ '%.3f'|format(item.duration_s) }}s</span>
-    </header>
+    </summary>
     <div class="body">
       {% if item.message %}
       <pre>{{ item.message }}</pre>
@@ -321,7 +327,7 @@
         <pre>{{ item.nodeid }}</pre>
       </details>
     </div>
-  </section>
+  </details>
   {% endfor %}
 
   <p class="meta" style="margin-top:40px">
