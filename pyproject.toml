@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "通用 API 测试框架：薄 SDK + 断言级证据 + 可定制 HTML 报告"
 requires-python = ">=3.11"
 readme = "docs/design.md"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "httpx>=0.27",
     "pydantic>=2.6",
