@@ -35,6 +35,12 @@
   th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { background: var(--soft); font-weight: 600; color: var(--muted); font-size: 12px;
        white-space: nowrap; }
+  /* 需求覆盖表：状态标记和用例编号被挤成两行就看不清了，给足最小宽度，
+     让说明列去占剩余空间（它本来就能换行）。 */
+  .matrix th.col-state, .matrix td.col-state,
+  .matrix th.col-verdict, .matrix td.col-verdict { min-width: 108px; }
+  .matrix th.col-auto, .matrix td.col-auto { min-width: 148px; }
+  .matrix th.col-note, .matrix td.col-note { width: 100%; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 
@@ -199,24 +205,30 @@
   </div>
   {% endif %}
 
-  <table>
+  <table class="matrix">
     <thead>
-      <tr><th>测试用例</th><th>覆盖状态</th><th>验证结论</th><th>自动化用例</th><th>说明</th></tr>
+      <tr>
+        <th>测试用例</th>
+        <th class="col-state">覆盖状态</th>
+        <th class="col-verdict">验证结论</th>
+        <th class="col-auto">自动化用例</th>
+        <th class="col-note">说明</th>
+      </tr>
     </thead>
     <tbody>
       {% for row in matrix.rows %}
       <tr>
         <td class="mono">{{ row.tc }}{% if row.title %}<div class="muted">{{ row.title }}</div>{% endif %}</td>
-        <td><span class="state {{ row.state }}">{{ row.state_label }}</span></td>
-        <td>
+        <td class="col-state"><span class="state {{ row.state }}">{{ row.state_label }}</span></td>
+        <td class="col-verdict">
           {% if row.verdict %}
           <span class="tag {{ row.verdict }}">{{ row.verdict_label }}</span>
           {% else %}<span class="tag none">无结论</span>{% endif %}
         </td>
-        <td class="mono">
+        <td class="mono col-auto">
           {% for auto_id in row.execution_ids %}{{ auto_id }}{% if not loop.last %}, {% endif %}{% else %}—{% endfor %}
         </td>
-        <td>
+        <td class="col-note">
           {{ row.note }}
           {% if row.uncovered %}
           <div class="muted">
