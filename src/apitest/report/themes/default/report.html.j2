@@ -21,13 +21,16 @@
   h3 { font-size: 14px; margin: 24px 0 8px; }
   .meta { color: var(--muted); font-size: 13px; }
   .meta code { background: var(--soft); padding: 1px 5px; border-radius: 4px; }
-  /* 执行上下文：标签与值成对排列，不用「·」串成一长行 */
-  .meta-bar { display: flex; flex-wrap: wrap; gap: 6px 22px; align-items: baseline;
-              margin: 4px 0 0; padding: 10px 14px; background: var(--soft);
-              border-radius: 8px; font-size: 12px; }
-  .meta-bar > div { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-  .meta-bar dt { color: var(--muted); }
-  .meta-bar dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+  /* 执行上下文：固定 3 列网格，标签在上、值在下。
+     用 flex-wrap 时 5 项在 1080px 内放得下就不换行，看起来仍是一行 —— 这里要的是
+     排版上分开，不是溢出才换行。 */
+  .meta-bar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+              gap: 12px 20px; margin: 4px 0 0; padding: 12px 16px;
+              background: var(--soft); border-radius: 8px; }
+  .meta-bar > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .meta-bar dt { color: var(--muted); font-size: 11px; }
+  .meta-bar dd { margin: 0; font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
+  @media (max-width: 760px) { .meta-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 16px 0; }
   .card { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
