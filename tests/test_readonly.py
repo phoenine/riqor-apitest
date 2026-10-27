@@ -281,6 +281,31 @@ def test_report_renders_readonly_section(tmp_path):
     assert "SHOW default_transaction_read_only" in html, "回读证据要可追溯"
 
 
+def test_evidence_details_sorted_by_case_id(tmp_path):
+    """证据详情按用例编号升序：AUTO-9 在 AUTO-10 前，AUTO-100 在 AUTO-20 后。
+
+    execution.json 里是「跑完的先后」，报告直接照抄会让同一批用例每次换顺序，
+    找一条用例得从头翻。编号带序号，排序必须按数值而不是字符串。
+    """
+    from apitest.evidence.models import (
+        EvidenceDocument, ExecutionRecord, ExecutionStatus, Meta)
+    from apitest.report.renderer import case_sort_key, render
+
+    order = ["AUTO-100", "AUTO-9", "AUTO-20", "AUTO-010"]
+    document = EvidenceDocument(
+        meta=Meta(execution_id="run-sort", project_id="demo", environment="local"),
+        executions=[ExecutionRecord(auto_id=auto, execution_status=ExecutionStatus.PASSED)
+                    for auto in order])
+
+    html = render(document, output=tmp_path / "r.html").read_text(encoding="utf-8")
+
+    assert case_sort_key("AUTO-9") < case_sort_key("AUTO-010") < case_sort_key("AUTO-20")
+    shown = [auto for auto in sorted(order, key=case_sort_key)
+             if html.rfind(auto) >= 0]
+    positions = [html.rfind(auto) for auto in shown]
+    assert positions == sorted(positions), f"证据详情没按编号排序：{shown}"
+
+
 # ---------------------------------------------------------------- 探针分类
 def test_probe_timeout_is_not_verified():
     """超时说明探针没跑成功，不是「写入被拒」。"""

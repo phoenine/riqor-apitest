@@ -24,6 +24,7 @@ from apitest.evidence.models import (
     Verdict,
 )
 from apitest.plan import (
+    BASIS_LABELS,
     STATE_LABELS,
     Plan,
     PlannedCase,
@@ -89,6 +90,19 @@ def _assertion_view(record: Any) -> dict[str, Any]:
         "basis_verified": basis.verified,
         "refs": record.refs,
     }
+
+
+def case_sort_key(auto_id: str) -> tuple[str, int, str]:
+    """按用例编号排序：AUTO-9 排在 AUTO-10 前面。
+
+    纯字典序会把 AUTO-100 排到 AUTO-20 之前 —— 编号是带序号的，人工看报告
+    时顺序必须与编号一致，否则找一条用例得从头翻。
+    非纯数字结尾的编号（如 AUTO-086b）按 (前缀, 序号, 全串) 三者兜底，保持稳定。
+    """
+    match = re.match(r"^(.*?)(\d+)(\D*)$", auto_id or "")
+    if not match:
+        return (auto_id or "", -1, auto_id or "")
+    return (match.group(1), int(match.group(2)), match.group(3))
 
 
 def _execution_view(record: Any) -> dict[str, Any]:
@@ -276,7 +290,10 @@ def build_context(document: EvidenceDocument, *,
                   title: str = "",
                   zentao_base_url: str = "",
                   evidence_dir: Path | None = None) -> dict[str, Any]:
-    executions = [_execution_view(e) for e in document.executions]
+    # 证据详情按用例编号排序：execution.json 里的顺序是「跑完的先后」，
+    # 报告要按编号读（AUTO-001 → AUTO-113），否则同一批用例每次顺序都不同。
+    ordered = sorted(document.executions, key=lambda e: case_sort_key(e.auto_id))
+    executions = [_execution_view(e) for e in ordered]
 
     status_counts = document.counts()
     verdict_counts = document.verdict_counts()
@@ -293,6 +310,10 @@ def build_context(document: EvidenceDocument, *,
         row["execution_ids"] = [r.auto_id for r in row["executions"]]
         row["state_label"] = STATE_LABELS.get(row["state"], row["state"])
         row["verdict_label"] = VERDICT_LABELS.get(row["verdict"], "") if row["verdict"] else "无结论"
+        row["basis_text"] = row.get("basis_label") or "—"
+        row["basis_debt_note"] = (
+            f"待补 {len(row['basis_debt'])} 条：" + "、".join(row["basis_debt"][:3])
+            if row.get("basis_debt") else "")
         # 有禅道载体的用例给出可点链接；本地标识（契约点等）不给，避免造出不存在的地址
         row["tc_url"] = _zentao_case_url(row["tc"], zentao_base_url)
         # 文件分组：88 行平铺时找一条用例全靠滚动，按出处折叠能先定位到域
@@ -328,6 +349,15 @@ def build_context(document: EvidenceDocument, *,
                  "count": verdict_counts.get(key, 0)}
                 for key in ("pass", "fail", "inconclusive", "invalid")
             ],
+            "basis_rows": [
+                {"key": key, "label": BASIS_LABELS.get(key, key), "count": count}
+                for key, count in sorted(
+                    ((grade, sum(1 for row in matrix["rows"]
+                                 if row.get("basis_grade") == grade))
+                     for grade in BASIS_LABELS),
+                    key=lambda kv: -kv[1])
+                if count
+            ],
             "pass_ratio": document.passed_ratio(),
             "basis_verified": basis["verified"],
             "basis_unverified": basis["unverified"],
@@ -348,7 +378,7 @@ def build_context(document: EvidenceDocument, *,
         "unlinked": unlinked,
         "executions": executions,
         "labels": {"status": STATUS_LABELS, "verdict": VERDICT_LABELS,
-                   "state": STATE_LABELS},
+                   "state": STATE_LABELS, "basis": BASIS_LABELS},
     }
 
 

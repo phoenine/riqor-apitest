@@ -54,6 +54,7 @@
   .matrix th.col-state, .matrix td.col-state,
   .matrix th.col-verdict, .matrix td.col-verdict { min-width: 108px; }
   .matrix th.col-auto, .matrix td.col-auto { min-width: 148px; }
+  .matrix th.col-basis, .matrix td.col-basis { min-width: 132px; }
   .matrix th.col-note, .matrix td.col-note { width: 100%; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
@@ -72,6 +73,7 @@
   .state.inconclusive { background: #fff8c5; color: var(--warn); }
   .state.not_run { background: var(--soft); color: var(--gray); }
   .state.not_implemented { background: #ffebe9; color: var(--bad); }
+  .state.invalid { background: #ddf4ff; color: var(--info); }
   .mark-ok { color: var(--ok); }
   .mark-bad { color: var(--bad); }
   .mark-unknown { color: var(--muted); }
@@ -126,6 +128,23 @@
     </div>
     {% endfor %}
   </div>
+
+  {% if summary.basis_rows %}
+  <h3>断言的依据来源</h3>
+  <table>
+    <thead><tr><th>依据来源</th><th class="num">用例数</th></tr></thead>
+    <tbody>
+      {% for row in summary.basis_rows %}
+      <tr><td>{{ row.label }}</td><td class="num">{{ row.count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="note">
+    这一栏是<strong>用例资产的质量</strong>（期望值凭什么算对），
+    <strong>不参与</strong>上面的验证结论与通过率。缺来源的用例会被
+    <code>apitest check --fail-on-findings</code> 在资产门拦下。
+  </div>
+  {% endif %}
 
   {% if failures %}
   <h3 class="alert-head">不通过项 · {{ failures|length }}</h3>
@@ -309,6 +328,7 @@
               <th class="col-case">用例标识 / 名称</th>
               <th class="col-state">覆盖状态</th>
               <th class="col-verdict">验证结论</th>
+              <th class="col-basis">依据来源</th>
               <th class="col-auto">自动化用例</th>
               <th class="col-note">说明</th>
             </tr>
@@ -325,6 +345,10 @@
             {% if row.verdict %}
             <span class="tag {{ row.verdict }}">{{ row.verdict_label }}</span>
             {% else %}<span class="tag none">无结论</span>{% endif %}
+          </td>
+          <td class="col-basis">
+            <span class="muted">{{ row.basis_text }}</span>
+            {% if row.basis_debt_note %}<div class="case-name">{{ row.basis_debt_note }}</div>{% endif %}
           </td>
           <td class="mono col-auto">
             {% for auto_id in row.execution_ids %}{{ auto_id }}{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">—</span>{% endfor %}
