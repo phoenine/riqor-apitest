@@ -74,8 +74,8 @@
   .case > summary { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px;
                     background: var(--soft); flex-wrap: wrap; cursor: pointer; list-style: none; }
   .case > summary::-webkit-details-marker { display: none; }
-  .case > summary::before { content: "&#9656;"; color: var(--muted); font-size: 11px; }
-  .case[open] > summary::before { content: "&#9662;"; }
+  .case > summary::before { content: "\25B8"; color: var(--muted); font-size: 11px; }
+  .case[open] > summary::before { content: "\25BE"; }
   .case > summary .id { font-weight: 600; }
   .case > summary .intent { color: var(--muted); font-size: 13px; flex: 1 1 320px; }
   .case .body { padding: 4px 14px 12px; }
