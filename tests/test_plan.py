@@ -136,11 +136,28 @@ def test_natural_language_required_ids_are_flagged_unstable():
 
 
 def test_unconfirmed_when_basis_not_confirmed():
-    document = _doc([_exec("TC-1", assertions=[_assertion(confirmed=False)])])
+    """承担 RA 的断言依据未确认 → 该 TC 未达到已验证。"""
+    document = _doc([_exec("TC-1", assertions=[_assertion(confirmed=False, covers=["RA-01"])])])
     row = build_matrix(document, _plan(PlannedCase(id="TC-1")))["rows"][0]
 
     assert row["state"] == "unconfirmed"
     assert "依据未确认" in row["note"]
+
+
+def test_auxiliary_assertion_does_not_downgrade():
+    """不承担 RA 的旁证依据不足，不该把 TC 从 verified 拉下来。
+
+    辅助断言（快照、反向排除）用 measured 是常态，它们本来就进不了
+    「需求验收」。若也算进依据检查，加一条快照就能让整条 TC 降级 ——
+    那样没人敢加严断言。
+    """
+    document = _doc([_exec("TC-1", assertions=[
+        _assertion(confirmed=True, covers=["RA-01"]),
+        _assertion(confirmed=False, covers=[]),
+    ])])
+    row = build_matrix(document, _plan(PlannedCase(id="TC-1")))["rows"][0]
+
+    assert row["state"] == "verified"
 
 
 def test_verified_requires_confirmed_basis_and_no_gap():

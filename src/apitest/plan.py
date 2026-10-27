@@ -388,9 +388,13 @@ def _evaluate_case(case: PlannedCase,
 
     # 依据有效性只看 basis —— a.verified 还要求断言 passed，
     # 用它判断会把「断言失败」误报成「依据未确认」。
+    #
+    # **只看承担 RA 的断言**：不标 covers 的断言是辅助证据（旁证、快照），
+    # 它们依据不足不代表验收点没验到。把辅助断言也算进来，一个快照就能
+    # 把整条 TC 从「已验证」拉下来。
     unconfirmed = [
         f"{r.auto_id}/{a.id}" for r in record_list for a in r.assertions
-        if not a.basis.verified
+        if not a.basis.verified and a.covers
     ]
     if unconfirmed:
         return {
