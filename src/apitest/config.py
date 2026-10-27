@@ -120,6 +120,8 @@ class DatasetConfig(BaseModel):
 
     type: str
     readonly: bool = True
+    #: 是否使用了数据库侧只读账号。框架无法验证，只能如实记录声明。
+    readonly_account: bool = False
 
 
 class ReportConfig(BaseModel):

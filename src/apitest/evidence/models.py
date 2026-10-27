@@ -232,6 +232,8 @@ class Meta(_Model):
     finished_at: str | None = None
     exit_code: int | None = None
     code_version: dict[str, Any] = Field(default_factory=dict)
+    #: 每个数据源的只读保障实况（declared / applied / verified）
+    readonly: dict[str, Any] = Field(default_factory=dict)
     config_digest: str = ""
     redaction_rule_version: str = "1"
     command: str = ""

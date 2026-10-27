@@ -22,6 +22,8 @@
 | 确定性场景 D1/D4/D5/D8/D9 | — | `tests/test_scenarios.py` |
 | 参数实例身份 + 附件隔离 | `pytest_plugin.py`、`context.py` | `tests/test_scenarios.py` |
 | 一致性校验按实例级比较 | `evidence/bundle.py` | `tests/test_riqor_contract.py` |
+| 只读三层（施加/回读/探针） | `dataset/readonly.py` | `tests/test_readonly.py` + 真库验证 |
+| PG 分项凭据组装 | `dataset/__init__.py` | `tests/test_readonly.py` |
 | HTML 报告三层 + 主题可复制 | `report/` | 同上 |
 | CLI：init / scaffold / verify / run / check / render | `runner/cli.py` | 手工 + 示例 |
 
@@ -42,7 +44,7 @@
 
 内置比较器的边界行为已在 `tests/test_framework.py` 覆盖，不依赖此功能。
 
-### P2 只读三层
+### ~~P2 只读三层~~（已完成，见 `readonly-verification.md`）
 
 设计第七节写了 account / transaction / statement_only 三层，
 实现只有语句检查。配置字段 `readonly_enforced_by` 未落地。

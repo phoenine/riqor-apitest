@@ -32,6 +32,7 @@ from apitest.evidence.models import EvidenceDocument, ExecutionStatus, Meta
 _PROJECT_KEY: "StashKey[ProjectConfig]" = StashKey()
 _ENV_KEY: "StashKey[str]" = StashKey()
 _EVIDENCE_KEY: "StashKey[Path]" = StashKey()
+_DATASETS_KEY: "StashKey[object]" = StashKey()
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -115,6 +116,18 @@ class Datasets:
     def __init__(self, config: ProjectConfig) -> None:
         self._config = config
         self._cache: dict[str, Dataset] = {}
+        self._reports: dict[str, Any] = {}
+
+    def reports(self) -> dict[str, Any]:
+        """只读保障实况。close() 之后仍可读 —— 那是运行级事实。"""
+        if self._reports:
+            return self._reports
+        found: dict[str, Any] = {}
+        for name, dataset in self._cache.items():
+            report = dataset.readonly_report()
+            if report is not None:
+                found[name] = report.to_dict()
+        return found
 
     def __getattr__(self, name: str) -> Dataset:
         if name.startswith("_"):
@@ -125,14 +138,18 @@ class Datasets:
         return self._cache[name]
 
     def close(self) -> None:
+        # 先固化只读实况：连接关了，报告还在
+        self._reports = self.reports()
         for dataset in self._cache.values():
             dataset.close()
         self._cache.clear()
 
 
 @pytest.fixture(scope="session")
-def data(apitest_config: ProjectConfig) -> Iterator[Datasets]:
+def data(apitest_config: ProjectConfig,
+         request: pytest.FixtureRequest) -> Iterator[Datasets]:
     datasets = Datasets(apitest_config)
+    request.config.stash[_DATASETS_KEY] = datasets
     try:
         yield datasets
     finally:
@@ -243,6 +260,9 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         if record.verdict is None and record.execution_status is ExecutionStatus.PASSED:
             record.verdict = record.derive_verdict()
 
+    datasets = config.stash.get(_DATASETS_KEY, None)
+    readonly = datasets.reports() if datasets is not None else {}
+
     env_name = config.stash.get(_ENV_KEY, None) or project.default_environment
     document = EvidenceDocument(
         meta=Meta(
@@ -251,6 +271,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
             environment=env_name,
             base_url=project.environments[env_name].base_url,
             exit_code=int(exitstatus),
+            readonly=readonly,
             command=" ".join(sys.argv),
         ),
         executions=executions,

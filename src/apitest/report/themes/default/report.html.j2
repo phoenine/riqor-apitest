@@ -51,6 +51,9 @@
   .state.inconclusive { background: #fff8c5; color: var(--warn); }
   .state.not_run { background: var(--soft); color: var(--gray); }
   .state.not_implemented { background: #ffebe9; color: var(--bad); }
+  .mark-ok { color: var(--ok); }
+  .mark-bad { color: var(--bad); }
+  .mark-unknown { color: var(--muted); }
   .assert-intent { color: var(--fg); font-family: inherit; font-size: 12px; margin-top: 2px; }
   .assert-source { color: var(--muted); font-size: 11px; margin-top: 1px; }
   .waiver { margin-top: 4px; padding: 4px 8px; background: var(--soft); border-radius: 4px; font-size: 12px; color: var(--muted); }
@@ -109,6 +112,38 @@
   {% if summary.has_no_verdict %}
   <div class="note">
     有实例没有验证结论（跳过 / 未运行 / 基础设施错误）。这些<strong>不是通过</strong>，也不计入通过率。
+  </div>
+  {% endif %}
+
+  {% if summary.readonly_rows %}
+  <h3>数据源只读保障</h3>
+  <table>
+    <thead>
+      <tr><th>数据源</th><th>层</th><th>已施加</th><th>已验证</th><th>依据</th></tr>
+    </thead>
+    <tbody>
+      {% for row in summary.readonly_rows %}
+        {% for layer in row.layers %}
+        <tr>
+          {% if loop.first %}<td rowspan="{{ row.layers|length }}"><span class="mono">{{ row.name }}</span></td>{% endif %}
+          <td>{{ layer.layer }}</td>
+          <td>{{ "是" if layer.applied else "否" }}</td>
+          <td class="mark-{{ 'ok' if layer.verified else ('bad' if layer.verified is false else 'unknown') }}">
+            {{ layer.mark }}{% if layer.verified is none %} 未验证{% elif layer.verified %} 已生效{% else %} <strong>未生效</strong>{% endif %}
+          </td>
+          <td class="muted mono">{{ layer.evidence }}</td>
+        </tr>
+        {% endfor %}
+      {% endfor %}
+    </tbody>
+  </table>
+  {% for warning in summary.readonly_warnings %}
+  <div class="note">{{ warning }}</div>
+  {% endfor %}
+  <div class="note">
+    只读由<strong>已施加且已验证</strong>的层保证。声明了但未验证的层不计入 ——
+    发出 <span class="mono">SET</span> 不等于生效（PostgreSQL 的
+    <span class="mono">SET TRANSACTION READ ONLY</span> 在 autocommit 下就只作用于它自己那条语句）。
   </div>
   {% endif %}
 

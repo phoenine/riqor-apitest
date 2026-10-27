@@ -113,6 +113,32 @@ def _execution_view(record: Any) -> dict[str, Any]:
     }
 
 
+def _readonly_rows(entries: dict[str, Any]) -> list[dict[str, Any]]:
+    """把只读实况摊平成一行一个数据源，供模板直接渲染。"""
+    rows: list[dict[str, Any]] = []
+    for name, info in (entries or {}).items():
+        layers = info.get("layers", [])
+        rows.append({
+            "name": name,
+            "declared": info.get("declared", []),
+            "applied": info.get("applied", []),
+            "verified": info.get("verified", []),
+            "layers": [
+                {
+                    "layer": layer.get("layer", ""),
+                    "applied": layer.get("applied", False),
+                    "verified": layer.get("verified"),
+                    "mark": {True: "✓", False: "✗", None: "?"}.get(
+                        layer.get("verified")),
+                    "evidence": layer.get("evidence", ""),
+                }
+                for layer in layers
+            ],
+            "warnings": info.get("warnings", []),
+        })
+    return rows
+
+
 def build_context(document: EvidenceDocument, *,
                   plan: "Plan | None" = None,
                   planned_tcs: list[str] | None = None,
@@ -155,6 +181,12 @@ def build_context(document: EvidenceDocument, *,
             "pass_ratio": document.passed_ratio(),
             "basis_verified": basis["verified"],
             "basis_unverified": basis["unverified"],
+            "readonly_rows": _readonly_rows(document.meta.readonly),
+            "readonly_warnings": [
+                f"{name}: {note}"
+                for name, info in (document.meta.readonly or {}).items()
+                for note in info.get("warnings", [])
+            ],
             "has_failures": bool(status_counts.get("failed")),
             "has_no_verdict": any(v is None for v in
                                   [e.verdict for e in document.executions]),

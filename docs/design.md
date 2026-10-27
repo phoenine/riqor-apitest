@@ -473,8 +473,16 @@ react-flow 只用于关系展示（追溯图、影响面），不替代表格与
 | 会话/事务 | `SET TRANSACTION READ ONLY`（PG）/ `readonly=1`（CK） | 强 |
 | 语句 | 只允许 SELECT/WITH/SHOW | 仅辅助，可被绕过 |
 
-配置 `readonly_enforced_by` 必填；只写 `statement_only` 时，
-报告应提示「只读仅由语句检查保证」。
+**实现状态**（详见 `readonly-verification.md`）：
+
+- 会话层：PG 用 `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`
+  （不是 `SET TRANSACTION` —— 后者在 autocommit 下无效，已被真库实测证伪），
+  CK 建连时传 `readonly=1` + `allow_ddl=0`
+- 每层区分 `declared` / `applied` / `verified`，**applied ≠ verified**：
+  发出 SET 不等于生效，必须回读或实测
+- 探针用 `CREATE TEMP TABLE`（只读下必被拒），不需要建持久表
+- 账户层框架无权验证，报告显示 `?` 未验证，不显示成打勾
+- 三层可组合，配置 `readonly_account` 声明账户层
 
 ### 7.2 对账证据必须记录一致性前提
 

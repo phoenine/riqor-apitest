@@ -17,12 +17,21 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from apitest.config import ConfigError, DatasetConfig
 from apitest.context import current_context
+from apitest.dataset.readonly import (
+    LayerState,
+    ReadonlyReport,
+    _clickhouse_session,
+    _postgres_session,
+    build_report,
+    verify_write_blocked,
+)
 
 _READONLY_PREFIXES = ("select", "with", "show", "describe", "desc", "explain")
 
@@ -49,6 +58,21 @@ def _assert_readonly(sql: str, *, datasource: str) -> None:
 class _BaseDataset:
     name: str = ""
     readonly: bool = True
+    _readonly_report: ReadonlyReport | None = None
+
+    def readonly_report(self) -> ReadonlyReport | None:
+        """只读保障实况；不在证据里就不要。"""
+        return self._readonly_report
+
+    def _probe_write(self, sql: str) -> None:
+        """直接打底层执行一条写语句 —— 只读验证用，**绕过**语句检查。
+
+        绕不过去就测不出真问题：语句检查是自己写的，用它验证自己没意义。
+        """
+        raise NotImplementedError
+
+    def verify_readonly(self, *, kind: str = "postgres") -> LayerState:
+        return verify_write_blocked(self._probe_write, kind=kind)
 
     def _record(self, sql: str, params: dict[str, Any],
                 rows: list[dict[str, Any]]) -> None:
@@ -156,6 +180,9 @@ class ClickHouseDataset(_BaseDataset):
         columns = list(result.column_names)
         return [dict(zip(columns, row)) for row in result.result_rows]
 
+    def _probe_write(self, sql: str) -> None:
+        self._client.command(sql)
+
     def close(self) -> None:
         self._client.close()
 
@@ -174,6 +201,9 @@ class PostgresDataset(_BaseDataset):
             cur.execute(sql, params or None)
             return list(cur.fetchall())
 
+    def _probe_write(self, sql: str) -> None:
+        self._conn.execute(sql)
+
     def close(self) -> None:
         self._conn.close()
 
@@ -186,10 +216,72 @@ def _require(package: str, extra: str) -> Any:
             f"数据源需要 {package}，请安装：pip install 'apitest[{extra}]'") from exc
 
 
+def _env(config: DatasetConfig, field: str, default: str) -> str:
+    return os.environ.get(getattr(config, field, None) or default, "")
+
+
+def _postgres_dsn(name: str, config: DatasetConfig) -> str:
+    """两种凭证给法都支持：完整 DSN，或分项环境变量。
+
+    只认 ``PG_DSN`` 会把一半项目的配置挡在门外；分项组装是这个包的
+    通用性要求，不是特例。
+    """
+    explicit = os.environ.get(getattr(config, "dsn_env", None) or "PG_DSN")
+    if explicit:
+        return explicit
+
+    host = _env(config, "host_env", "PG_HOST")
+    if not host:
+        raise ConfigError(
+            f"数据源 {name!r} 需要 PG_DSN，或 PG_HOST/PG_PORT/PG_USERNAME/"
+            f"PG_PASSWORD/PG_DATABASE 分项环境变量")
+
+    parts = [
+        f"host={host}",
+        f"port={_env(config, 'port_env', 'PG_PORT') or getattr(config, 'port', 5432)}",
+        f"dbname={_env(config, 'database_env', 'PG_DATABASE') or getattr(config, 'database', 'postgres')}",
+        f"user={_env(config, 'user_env', 'PG_USERNAME')}",
+        f"password={_env(config, 'password_env', 'PG_PASSWORD')}",
+        f"sslmode={_env(config, 'sslmode_env', 'PG_SSLMODE') or 'prefer'}",
+        "connect_timeout=15",
+    ]
+    return " ".join(part for part in parts if not part.endswith("="))
+
+
+def _account_declared(config: DatasetConfig) -> bool:
+    return bool(getattr(config, "readonly_account", False))
+
+
+def _clickhouse_report(dataset: "ClickHouseDataset", config: DatasetConfig,
+                       name: str) -> ReadonlyReport:
+    """回读 system.settings，再实测一次写。
+
+    回读告诉你「设置是什么」，实测告诉你「限制到底生效没有」——两者都要，
+    因为 PG 那边的反例正是「设置写在了不影响后续事务的作用域里」。
+    """
+    try:
+        echo = {row[0]: row[1] for row in dataset._client.query(
+            "SELECT name, value FROM system.settings "
+            "WHERE name IN ('readonly', 'allow_ddl')").result_rows}
+        session = _clickhouse_session(echo)
+    except Exception as exc:                          # noqa: BLE001
+        session = LayerState("session", applied=True, verified=None,
+                             evidence=f"回读失败：{type(exc).__name__}: {exc}")
+    statement = dataset.verify_readonly(kind="clickhouse")
+    return build_report(name, account=_account_declared(config),
+                        session=session, statement=statement)
+
+
+def _postgres_report(dataset: "PostgresDataset", conn: Any,
+                     config: DatasetConfig, name: str) -> ReadonlyReport:
+    session = _postgres_session(conn)
+    statement = dataset.verify_readonly(kind="postgres")
+    return build_report(name, account=_account_declared(config),
+                        session=session, statement=statement)
+
+
 def build_dataset(name: str, config: DatasetConfig, root: Path) -> Dataset:
     """按配置构造数据源。凭据同样只从环境变量取。"""
-    import os
-
     kind = config.type
     readonly = config.readonly
 
@@ -211,26 +303,30 @@ def build_dataset(name: str, config: DatasetConfig, root: Path) -> Dataset:
             raise ConfigError(f"数据源 {name!r} 依赖环境变量 {host_env}")
         port_env = getattr(config, "port_env", None) or "CK_PORT"
         port = int(os.environ.get(port_env) or getattr(config, "port", 8123))
+        # readonly=1 之后用户不能再改设置，必须在建连时传入
+        settings = {"readonly": 1, "allow_ddl": 0} if readonly else None
         client = clickhouse_connect.get_client(
             host=host, port=port,
             username=os.environ.get(getattr(config, "user_env", "") or "CK_USERNAME", "default"),
             password=os.environ.get(getattr(config, "password_env", "") or "CK_PASSWORD", ""),
             database=getattr(config, "database", "default"),
+            settings=settings,
         )
-        return ClickHouseDataset(client, name, readonly=readonly)
+        dataset = ClickHouseDataset(client, name, readonly=readonly)
+        if readonly:
+            dataset._readonly_report = _clickhouse_report(dataset, config, name)
+        return dataset
 
     if kind == "postgres":
         _require("psycopg", "postgres")
         import psycopg
 
-        dsn_env = getattr(config, "dsn_env", None) or "PG_DSN"
-        dsn = os.environ.get(dsn_env)
-        if not dsn:
-            raise ConfigError(f"数据源 {name!r} 依赖环境变量 {dsn_env}")
+        dsn = _postgres_dsn(name, config)
         conn = psycopg.connect(dsn, autocommit=True)
+        dataset = PostgresDataset(conn, name, readonly=readonly)
         if readonly:
-            conn.execute("SET TRANSACTION READ ONLY")
-        return PostgresDataset(conn, name, readonly=readonly)
+            dataset._readonly_report = _postgres_report(dataset, conn, config, name)
+        return dataset
 
     raise ConfigError(
         f"未知数据源类型 {kind!r}；内置 static / clickhouse / postgres。"
