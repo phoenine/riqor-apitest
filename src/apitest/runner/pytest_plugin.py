@@ -111,7 +111,19 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         directory = Path(explicit)
     else:
         project = config.stash.get(_PROJECT_KEY, None)
-        root = getattr(project, "root", None) or Path.cwd()
+        if project is None:
+            # sessionstart 早于 collection，`session.items` 还是空的，无法像
+            # ``apitest_config`` fixture 那样遍历测试路径。只能从 cwd 往上找 ——
+            # 找不到就退回 cwd，那正是「框架自测在仓库根跑」的情形。
+            explicit_cfg = config.getoption("apitest_config", None)
+            try:
+                project = (load_config(explicit_cfg) if explicit_cfg
+                           else load_config(find_config(Path.cwd())))
+                config.stash[_PROJECT_KEY] = project
+            except ConfigError:
+                project = None
+        resolver = getattr(project, "resolve_evidence_root", None)
+        root = resolver() if callable(resolver) else (getattr(project, "root", None) or Path.cwd())
         # 精确到毫秒 + pid：只到秒时并行跑两次会写进同一个目录
         stamp = time.strftime("%Y%m%dT%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}-{os.getpid()}"
         directory = Path(root) / "outputs" / "runs" / stamp
@@ -177,7 +189,7 @@ def apitest_evidence_dir(apitest_config: ProjectConfig,
         directory = Path(explicit)
     else:
         stamp = time.strftime("%Y%m%dT%H%M%S")
-        directory = apitest_config.root / "outputs" / "runs" / stamp
+        directory = apitest_config.resolve_evidence_root() / "outputs" / "runs" / stamp
     directory.mkdir(parents=True, exist_ok=True)
     request.config.stash[_EVIDENCE_KEY] = directory
     return directory

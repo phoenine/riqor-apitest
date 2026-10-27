@@ -332,3 +332,52 @@ def test_theme_directory_is_resolvable(tmp_path):
     assert _theme_dir("default").is_dir()
     with pytest.raises(FileNotFoundError, match="不存在"):
         _theme_dir("no-such-theme")
+
+
+# ---------------------------------------------------------------- 证据目录
+def _write_project_config(directory: Path, **extra) -> Path:
+    """写一份最小 apitest.yaml（与前面的 _write_config 签名不同，勿合并）。"""
+    directory.mkdir(parents=True, exist_ok=True)
+    body = {
+        "project": {"id": "demo"},
+        "environments": {"local": {"base_url": "http://127.0.0.1:1"}},
+    }
+    body.update(extra)
+    path = directory / "apitest.yaml"
+    path.write_text(json.dumps(body), encoding="utf-8")
+    return path
+
+
+def test_evidence_root_defaults_to_git_root(tmp_path):
+    """证据目录落在 git 仓库根，不随「从哪个子目录跑」散落。
+
+    之前用配置文件所在目录：``cases/epvs/outputs``、``examples/demo/outputs``
+    与根目录的 ``outputs`` 三份并存，历史运行被切碎，跨运行趋势比不了。
+    """
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    nested = repo / "cases" / "epvs"
+    _write_project_config(nested)
+
+    config = load_config(nested)
+    assert config.resolve_evidence_root() == repo.resolve()
+
+
+def test_evidence_root_honours_explicit_dir(tmp_path):
+    """显式配置优先，且相对路径按配置文件目录解析。"""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    nested = repo / "cases" / "epvs"
+    _write_project_config(nested, evidence_dir="../../runs-here")
+
+    config = load_config(nested)
+    assert config.resolve_evidence_root() == (nested / "../../runs-here").resolve()
+
+
+def test_evidence_root_falls_back_without_git(tmp_path):
+    """不在 git 仓库里时退回配置文件目录 —— 不能往上找到根目录去。"""
+    isolated = tmp_path / "plain"
+    _write_project_config(isolated)
+
+    config = load_config(isolated)
+    assert config.resolve_evidence_root() == isolated.resolve()

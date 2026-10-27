@@ -180,6 +180,30 @@ class ProjectConfig(BaseModel):
     #: 配置文件所在目录，用于解析相对路径
     root: Path = Field(default_factory=Path.cwd)
 
+    #: 证据包根目录（相对配置文件，或绝对路径）。留空则落到**仓库根**的
+    #: ``outputs/runs/``——同一个仓库里的业务用例与示例共用一份证据目录，
+    #: 不会因为从哪个目录跑而散落多处。
+    evidence_dir: str | None = None
+
+    def resolve_evidence_root(self) -> Path:
+        """证据（run 目录）的父目录。
+
+        优先级：显式 ``evidence_dir`` > 最近的 git 仓库根 > 配置文件目录。
+
+        之前直接用 ``root``（配置文件所在目录），结果是同一仓库里
+        ``cases/epvs/outputs/runs``、``examples/demo/outputs/runs`` 与根目录的
+        ``outputs/runs`` 三份并存 —— 从不同 cwd 跑就换个地方落，历史运行被切碎，
+        跨运行趋势也就比不了。
+        """
+        if self.evidence_dir:
+            explicit = Path(self.evidence_dir)
+            return explicit if explicit.is_absolute() else (self.root / explicit).resolve()
+        start = self.root.resolve()
+        for candidate in (start, *start.parents):
+            if (candidate / ".git").exists():
+                return candidate
+        return start
+
     # ------------------------------------------------------------------
     def environment_name(self, override: str | None = None) -> str:
         """选择顺序：显式参数 > APITEST_ENV > default_environment。"""
