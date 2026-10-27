@@ -220,7 +220,8 @@ def evaluate_case(case: PlannedCase,
             "executions": [],
             "uncovered": _uncovered(case, record_list),
             "waived": case.waived.model_dump() if case.waived else None,
-            "note": ("已豁免：" + case.waived.reason) if case.waived
+            # 原因由 waiver 块渲染一次就够，note 只做标记，避免同一段话印两遍
+            "note": "已豁免，缺口保留" if case.waived
                     else "计划里有，但没有任何用例声明该 TC",
         }
 

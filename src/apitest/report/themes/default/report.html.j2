@@ -73,7 +73,10 @@
   .mark-unknown { color: var(--muted); }
   .assert-intent { color: var(--fg); font-family: inherit; font-size: 12px; margin-top: 2px; }
   .assert-source { color: var(--muted); font-size: 11px; margin-top: 1px; }
-  .waiver { margin-top: 4px; padding: 4px 8px; background: var(--soft); border-radius: 4px; font-size: 12px; color: var(--muted); }
+  .waiver { margin-top: 4px; padding: 4px 8px; background: var(--soft); border-radius: 4px;
+            font-size: 12px; color: var(--muted); }
+  .waiver + .waiver { margin-top: 2px; }
+  .waiver-impact { display: block; margin-top: 2px; opacity: .85; }
   .tag.verified { background: #dafbe1; color: var(--ok); }
 
   .note { border-left: 3px solid var(--warn); background: #fffdf3; padding: 10px 14px; margin: 12px 0; font-size: 13px; }
@@ -249,8 +252,8 @@
           {% endif %}
           {% if row.waived %}
           <div class="waiver">
-            显式豁免 —— 原因：{{ row.waived.reason }}
-            {% if row.waived.impact %}<br>影响：{{ row.waived.impact }}{% endif %}
+            {{ row.waived.reason }}
+            {% if row.waived.impact %}<br><span class="waiver-impact">影响：{{ row.waived.impact }}</span>{% endif %}
           </div>
           {% endif %}
         </td>
