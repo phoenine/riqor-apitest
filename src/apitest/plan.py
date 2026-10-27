@@ -232,7 +232,11 @@ def evaluate_case(case: PlannedCase,
     unexecuted = {ExecutionStatus.SKIPPED, ExecutionStatus.NOT_RUN,
                   ExecutionStatus.INFRASTRUCTURE_ERROR, ExecutionStatus.BLOCKED}
 
-    if all(state in unexecuted for state in states):
+    # 必须同时要求「没有任何结论」。前提检查本身会产生结论：
+    # 前提不成立 → inconclusive，前提规则抛异常 → invalid。用例因此被标记
+    # blocked，但它**确实验过前提**。只看执行状态会把这两种结论抹成
+    # 「未执行 / 无结论」，等于把已经得到的判断丢掉。
+    if verdict is None and all(state in unexecuted for state in states):
         return {
             "tc": case.id, "title": case.title,
             "state": CoverageState.NOT_RUN.value, "verdict": None,
@@ -248,10 +252,13 @@ def evaluate_case(case: PlannedCase,
         unexecuted = [
             (r.param_instance or {}).get("id") or r.auto_id
             for r in record_list
+            # 同样要带 verdict is None：blocked + inconclusive 的实例
+            # 验过前提，不能算「缺必要实例」
             if r.execution_status in {ExecutionStatus.SKIPPED,
                                       ExecutionStatus.NOT_RUN,
                                       ExecutionStatus.INFRASTRUCTURE_ERROR,
                                       ExecutionStatus.BLOCKED}
+            and r.verdict is None
         ]
         if unexecuted:
             return {
@@ -307,6 +314,21 @@ def evaluate_case(case: PlannedCase,
             "executions": record_list, "uncovered": [],
             "waived": case.waived.model_dump() if case.waived else None,
             "note": f"关键断言依据未确认：{', '.join(unconfirmed[:5])}",
+        }
+
+    if verdict == "invalid":
+        # 结论不可信：清理失败、依据不可定位、前提检查本身出错。
+        # 覆盖状态借用 unconfirmed（覆盖了但结论不能采信），
+        # 不能落到 verified —— 那是「验过了，通过」的意思。
+        return {
+            "tc": case.id, "title": case.title,
+            "state": CoverageState.UNCONFIRMED.value, "verdict": verdict,
+            "executions": record_list,
+            "uncovered": _uncovered(case, record_list),
+            "waived": case.waived.model_dump() if case.waived else None,
+            "note": "结论不可采信（" + (
+                "清理失败" if any(r.cleanup_error for r in record_list)
+                else "依据或前提检查有误") + "）",
         }
 
     return {

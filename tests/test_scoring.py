@@ -170,3 +170,83 @@ def test_dot(api):
         basis = record["assertions"][0]["basis"]
         assert basis["locatable"] is True, f"{basis['ref']} 判成不可定位"
         assert record["verdict"] == "pass"
+
+
+# ================================================================ 前提检查的结论
+def test_precondition_false_is_inconclusive_in_matrix(tmp_path):
+    """前提不成立 → inconclusive。用例因此被标 blocked，
+    但前提**确实验过** —— 不能抹成「未执行 / 无结论」。"""
+    root = _project("""\
+from apitest import case, expect, precondition, req
+
+
+@case(id="AUTO-010", tc="TC-10", intent="前提不成立")
+def test_p(api):
+    pre = precondition(name="数据可区分", source={"kind": "fixture"},
+                       rule=lambda data: data.get("ok") is True)
+    assert pre.holds({"ok": False}) is False
+    expect(1).equal_to(1, basis=req("REQ-1", confirmed=True))
+""")
+    doc = EvidenceDocument.model_validate(_run(root, tmp_path / "ev"))
+    record = doc.executions[0]
+    # 状态仍是 passed（断言确实跑了），结论才是 inconclusive
+    assert record.verdict is Verdict.INCONCLUSIVE
+
+    row = build_matrix(doc, Plan(test_cases=[PlannedCase(id="TC-10")]))["rows"][0]
+    assert row["state"] == "inconclusive", "前提结论被换成「未执行」"
+    assert row["verdict"] == "inconclusive"
+
+
+def test_precondition_error_is_invalid_in_matrix(tmp_path):
+    """前提规则抛异常 → invalid（结论不可信），也不能抹成未执行。"""
+    root = _project("""\
+from apitest import case, expect, precondition, req
+
+
+@case(id="AUTO-011", tc="TC-11", intent="前提检查炸了")
+def test_p(api):
+    pre = precondition(name="字段存在", source={"kind": "fixture"},
+                       rule=lambda data: data["missing_key"] is not None)
+    pre.holds({"ok": True})
+    expect(1).equal_to(1, basis=req("REQ-1", confirmed=True))
+""")
+    doc = EvidenceDocument.model_validate(_run(root, tmp_path / "ev"))
+    record = doc.executions[0]
+    assert record.verdict is Verdict.INVALID
+
+    row = build_matrix(doc, Plan(test_cases=[PlannedCase(id="TC-11")]))["rows"][0]
+    assert row["verdict"] == "invalid"
+    assert row["state"] != "not_run", "结论被抹成未执行"
+    assert row["state"] == "unconfirmed", "invalid 不能落进 verified"
+
+
+def test_blocked_with_verdict_is_not_counted_as_missing_instance(tmp_path):
+    """blocked + 有结论的实例验过前提，不算「缺必要参数实例」。"""
+    root = _project("""\
+import pytest
+from apitest import case, expect, precondition, req
+
+
+@case(id="AUTO-012", tc="TC-12", intent="一支前提不成立")
+@pytest.mark.parametrize("v", [1, 2])
+def test_p(api, v):
+    if v == 2:
+        pre = precondition(name="数据可区分", source={"kind": "fixture"},
+                           rule=lambda data: False)
+        pre.holds({"ok": False})
+        return
+    expect(v).equal_to(v, basis=req("REQ-1", confirmed=True))
+""")
+    doc = EvidenceDocument.model_validate(_run(root, tmp_path / "ev"))
+    row = build_matrix(doc, Plan(test_cases=[PlannedCase(id="TC-12")]))["rows"][0]
+    assert row["state"] == "inconclusive", f"不该判成 {row['state']}：{row.get('note')}"
+
+
+def test_template_ratio_note_is_not_self_contradictory():
+    """通过率说明前后不能矛盾。"""
+    from apitest.report.renderer import THEMES_DIR
+
+    text = (THEMES_DIR / "default" / "report.html.j2").read_text(encoding="utf-8")
+    ratio_block = text[text.index("通过率 {{"):text.index("未执行任何实例")]
+    assert "计入分母" not in ratio_block or "不进分母" not in ratio_block
+    assert ratio_block.count("不进分母") <= 1
