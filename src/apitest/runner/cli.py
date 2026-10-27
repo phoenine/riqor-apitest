@@ -322,11 +322,30 @@ def cmd_render(args: argparse.Namespace) -> int:
 
     output = Path(args.output) if args.output else evidence / "report.html"
     render_report(document, output=output, theme=args.theme, plan=plan,
-                  planned_tcs=args.planned_tcs or None, title=args.title or "")
+                  planned_tcs=args.planned_tcs or None, title=args.title or "",
+                  zentao_base_url=_resolve_zentao_base_url(args))
     print(f"已生成 {output}")
     if plan is not None:
         print(f"覆盖矩阵：{len(plan.test_cases)} 个测试用例")
     return 0
+
+
+def _resolve_zentao_base_url(args: argparse.Namespace) -> str:
+    """禅道地址来源：--zentao-base-url > 配置文件 report.zentao_base_url。
+
+    只用来把「禅道1234」这类标识渲染成可点链接，取不到就不出链接。
+    """
+    if getattr(args, "zentao_base_url", None):
+        return args.zentao_base_url
+    if args.config:
+        import yaml
+
+        try:
+            raw = yaml.safe_load(Path(args.config).read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            return ""
+        return str((raw.get("report") or {}).get("zentao_base_url") or "")
+    return ""
 
 
 def _resolve_plan(args: argparse.Namespace) -> "Plan | None":
@@ -399,6 +418,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_render.add_argument("--output", default=None)
     p_render.add_argument("--theme", default="default")
     p_render.add_argument("--title", default=None)
+    p_render.add_argument("--zentao-base-url", default=None,
+                          help="禅道地址，用于把「禅道1234」标识渲染成链接")
     p_render.add_argument("--plan", default=None, help="计划清单路径（覆盖矩阵输入）")
     p_render.add_argument("--config", default=None, help="配置文件路径（从中读 report.plan）")
     p_render.add_argument("--planned-tcs", nargs="*", default=[],

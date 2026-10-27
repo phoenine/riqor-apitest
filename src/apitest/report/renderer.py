@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from pathlib import Path
 from typing import Any
 
@@ -141,10 +143,24 @@ def _readonly_rows(entries: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+_ZENTAO_CASE_RE = re.compile(r"^禅道(\d+)$")
+
+
+def _zentao_case_url(tc_id: str, base_url: str) -> str:
+    """禅道用例标识 → 用例详情页地址；本地标识返回空串。"""
+    if not base_url:
+        return ""
+    match = _ZENTAO_CASE_RE.match((tc_id or "").strip())
+    if not match:
+        return ""
+    return f"{base_url.rstrip('/')}/testcase-view-{match.group(1)}.html"
+
+
 def build_context(document: EvidenceDocument, *,
                   plan: "Plan | None" = None,
                   planned_tcs: list[str] | None = None,
-                  title: str = "") -> dict[str, Any]:
+                  title: str = "",
+                  zentao_base_url: str = "") -> dict[str, Any]:
     executions = [_execution_view(e) for e in document.executions]
 
     status_counts = document.counts()
@@ -162,11 +178,14 @@ def build_context(document: EvidenceDocument, *,
         row["execution_ids"] = [r.auto_id for r in row["executions"]]
         row["state_label"] = STATE_LABELS.get(row["state"], row["state"])
         row["verdict_label"] = VERDICT_LABELS.get(row["verdict"], "") if row["verdict"] else "无结论"
+        # 有禅道载体的用例给出可点链接；本地标识（契约点等）不给，避免造出不存在的地址
+        row["tc_url"] = _zentao_case_url(row["tc"], zentao_base_url)
 
     unlinked = [item for item in executions if not item["tc"]]
 
     return {
         "title": title or document.meta.project_id or "API 测试报告",
+        "zentao_base_url": zentao_base_url,
         "meta": document.meta.model_dump(),
         "summary": {
             "total": len(executions),
@@ -203,7 +222,8 @@ def build_context(document: EvidenceDocument, *,
 
 def render(document: EvidenceDocument, *, output: Path, theme: str = "default",
            plan: "Plan | None" = None,
-           planned_tcs: list[str] | None = None, title: str = "") -> Path:
+           planned_tcs: list[str] | None = None, title: str = "",
+           zentao_base_url: str = "") -> Path:
     """渲染 HTML 报告，返回输出路径。"""
     theme_path = _theme_dir(theme)
     env = Environment(
@@ -213,7 +233,8 @@ def render(document: EvidenceDocument, *, output: Path, theme: str = "default",
         lstrip_blocks=True,
     )
     template = env.get_template("report.html.j2")
-    context = build_context(document, plan=plan, planned_tcs=planned_tcs, title=title)
+    context = build_context(document, plan=plan, planned_tcs=planned_tcs, title=title,
+                            zentao_base_url=zentao_base_url)
 
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)

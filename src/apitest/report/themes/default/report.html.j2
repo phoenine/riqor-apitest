@@ -48,6 +48,8 @@
      让说明列去占剩余空间（它本来就能换行）。 */
   .matrix th.col-case, .matrix td.col-case { min-width: 340px; }
   .case-id { font-size: 13px; }
+  .case-link { color: var(--accent, #2563eb); text-decoration: none; border-bottom: 1px dotted currentColor; }
+  .case-link:hover { border-bottom-style: solid; }
   .case-name { color: var(--muted); font-size: 12px; margin-top: 1px; }
   .matrix th.col-state, .matrix td.col-state,
   .matrix th.col-verdict, .matrix td.col-verdict { min-width: 108px; }
@@ -233,7 +235,7 @@
       {% for row in matrix.rows %}
       <tr>
         <td class="col-case">
-          <span class="mono case-id">{{ row.tc }}</span>
+          {% if row.tc_url %}<a class="mono case-id case-link" href="{{ row.tc_url }}" target="_blank" rel="noopener">{{ row.tc }}</a>{% else %}<span class="mono case-id">{{ row.tc }}</span>{% endif %}
           {% if row.title %}<div class="case-name">{{ row.title }}</div>{% endif %}
         </td>
         <td class="col-state"><span class="state {{ row.state }}">{{ row.state_label }}</span></td>
