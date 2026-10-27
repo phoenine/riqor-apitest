@@ -19,7 +19,8 @@ from typing import Any, Iterable, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from apitest.evidence.models import EvidenceDocument, ExecutionRecord, ExecutionStatus
+from apitest.evidence.models import (EvidenceDocument, ExecutionRecord,
+                                    ExecutionStatus, Verdict)
 
 
 class PlanError(ValueError):
@@ -146,6 +147,39 @@ class CoverageState(str, Enum):
     VERIFIED = "verified"                 # 必需验证全部完成且依据已确认
 
 
+class RegressionState(str, Enum):
+    """**行为回归**是否偏离批准的基线 —— 与「需求验收」并列的第二个维度。
+
+    两者回答的问题不同，不能互相替代：
+
+    - 需求验收：是否符合约定。要有效需求/规范依据。
+    - 行为回归：是否偏离已批准的基线。要基线事先固定、可追溯、比较条件成立。
+
+    一条 TC 完全可以「回归通过、验收依据不足」—— 说明行为没变，
+    但没人书面说过这个行为是对的。
+    """
+
+    #: 断言期望来自需求/规范/参考计算，不依赖实测基线
+    NOT_APPLICABLE = "not_applicable"
+    #: 与已采纳基线一致
+    PASS = "pass"
+    #: 偏离已采纳基线 —— 是缺陷还是合理变更，需要人判断
+    DIFF = "diff"
+    #: 用了实测值当期望，但没登记基线身份（出处/版本/条件/审核）
+    NO_BASELINE = "no_baseline"
+    #: 证据本身不可信，比较没有意义
+    INVALID = "invalid"
+
+
+REGRESSION_LABELS = {
+    "not_applicable": "不适用",
+    "pass": "与基线一致",
+    "diff": "偏离基线",
+    "no_baseline": "无基线",
+    "invalid": "证据无效",
+}
+
+
 STATE_LABELS = {
     "not_implemented": "无对应用例",
     "not_run": "未执行",
@@ -208,9 +242,57 @@ def _uncovered(case: PlannedCase,
     ]
 
 
+def _regression_of(record_list: list[ExecutionRecord]) -> dict[str, Any]:
+    """算「行为回归」维度：与已采纳基线是否一致。
+
+    **不把缺基线的实测值当回归通过。** 一条断言的期望若来自 ``measured``
+    但四要素（出处/版本/条件/审核）不全，它既不能证明符合需求，也不能证明
+    行为未变 —— 只能说明「某个时刻看到过这个值」。这种情况报 ``no_baseline``，
+    而不是顺手给个绿灯。
+    """
+    if not record_list:
+        return {"state": RegressionState.NOT_APPLICABLE.value, "note": "",
+                "measured": 0, "ready": 0}
+
+    measured = [a for r in record_list for a in r.assertions
+                if a.basis.kind == "measured"]
+    if not measured:
+        return {"state": RegressionState.NOT_APPLICABLE.value,
+                "note": "期望来自需求/规范，不依赖实测基线",
+                "measured": 0, "ready": 0}
+
+    ready = [a for a in measured if a.basis.regression_ready]
+    if len(ready) < len(measured):
+        return {"state": RegressionState.NO_BASELINE.value,
+                "note": f"{len(measured) - len(ready)}/{len(measured)} 条实测断言未登记基线身份",
+                "measured": len(measured), "ready": len(ready)}
+
+    if any(r.verdict is Verdict.INVALID for r in record_list):
+        return {"state": RegressionState.INVALID.value,
+                "note": "证据无效，比较无意义",
+                "measured": len(measured), "ready": len(ready)}
+
+    failed = [a for r in record_list for a in r.assertions if a.result != "passed"]
+    if failed:
+        return {"state": RegressionState.DIFF.value,
+                "note": f"{len(failed)} 条断言与基线不符，需判断是缺陷还是合理变更",
+                "measured": len(measured), "ready": len(ready)}
+
+    return {"state": RegressionState.PASS.value, "note": "",
+            "measured": len(measured), "ready": len(ready)}
+
+
 def evaluate_case(case: PlannedCase,
                   record_list: list[ExecutionRecord]) -> dict[str, Any]:
-    """算一条 TC 的覆盖状态与验证结论。"""
+    """算一条 TC 的**需求验收**覆盖状态与结论，并附上**行为回归**判定。"""
+    row = _evaluate_case(case, record_list)
+    row["regression"] = _regression_of(record_list)
+    return row
+
+
+def _evaluate_case(case: PlannedCase,
+                   record_list: list[ExecutionRecord]) -> dict[str, Any]:
+    """覆盖状态与验收结论的归约本体（不含回归维度）。"""
     if not record_list:
         return {
             "tc": case.id,
@@ -362,8 +444,11 @@ def build_matrix(document: EvidenceDocument,
             for case in plan.test_cases]
 
     summary: dict[str, int] = {state.value: 0 for state in CoverageState}
+    regression_summary: dict[str, int] = {}
     for row in rows:
         summary[row["state"]] += 1
+        regression_summary[row["regression"]["state"]] = (
+            regression_summary.get(row["regression"]["state"], 0) + 1)
 
     waived = sum(1 for row in rows if row["waived"])
     unverified = [row for row in rows
@@ -376,6 +461,7 @@ def build_matrix(document: EvidenceDocument,
         "computable": True,
         "rows": rows,
         "summary": summary,
+        "regression_summary": regression_summary,
         "waived": waived,
         "waived_gaps": waived_gaps,
         "gaps": gaps,

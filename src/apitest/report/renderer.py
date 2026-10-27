@@ -44,6 +44,8 @@ STATUS_LABELS = {
 VERDICT_LABELS = {
     "pass": "验证通过",
     "fail": "验证失败",
+    # 期望没有可判定的身份 —— 既不是通过也不是失败
+    "unconfirmed": "依据不足",
     "inconclusive": "无法验证",
     "invalid": "结论不可信",
 }

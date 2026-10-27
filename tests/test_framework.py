@@ -114,7 +114,7 @@ def test_assertion_records_basis_and_passes(tmp_path):
     assert [a.verified for a in assertions] == [True, True, False, False]
     assert records[0].execution_status is ExecutionStatus.PASSED
     # 断言全过，但存在未证实依据 → 结论不可信，不是 pass
-    assert records[0].verdict is Verdict.INVALID
+    assert records[0].verdict is Verdict.UNCONFIRMED
 
 
 def test_failed_assertion_raises_and_marks_failed(tmp_path):
@@ -170,7 +170,7 @@ def _assertion(kind="equal_to", verified=True, check="not_run") -> AssertionReco
 
 def test_verdict_pass_requires_verified_assertions():
     assert _record(verdict_assertions=[_assertion(verified=True)]).verdict is Verdict.PASS
-    assert _record(verdict_assertions=[_assertion(verified=False)]).verdict is Verdict.INVALID
+    assert _record(verdict_assertions=[_assertion(verified=False)]).verdict is Verdict.UNCONFIRMED
 
 
 def test_declared_but_unconfirmed_basis_is_not_verified():
@@ -183,7 +183,9 @@ def test_declared_but_unconfirmed_basis_is_not_verified():
 
     assert unconfirmed.basis.declared_only is True
     assert unconfirmed.verified is False
-    assert record.verdict is Verdict.INVALID
+    # 依据未确认 ≠ 证据不可信。归 INVALID 会把「还没补依据」说成「结论有毒」，
+    # 掩盖了真正该补的是依据。
+    assert record.verdict is Verdict.UNCONFIRMED
 
 
 def test_greater_than_zero_can_be_fully_verified():

@@ -14,10 +14,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-BasisKind = Literal["req", "schema", "ref", "measured", "observed"]
+BasisKind = Literal["req", "schema", "ref", "defect", "measured", "observed"]
 
 #: 可以支撑「已验证」的来源类别（仍需 confirmed）
-VERIFIED_KINDS: frozenset[str] = frozenset({"req", "schema", "ref"})
+#:
+#: ``defect`` 是「已确认的缺陷修复约定」（如禅道 bug 单裁定的正确行为）——
+#: 它不是需求，但同样是「这个期望为什么对」的书面根据。
+VERIFIED_KINDS: frozenset[str] = frozenset({"req", "schema", "ref", "defect"})
 
 
 @dataclass(frozen=True)
@@ -40,6 +43,14 @@ class Basis:
     inputs: dict[str, Any] | None = field(default=None)
     confirmed: bool = False
     locatable: bool | None = None
+    #: 基线身份（仅 measured 使用）：来自哪次运行／证据包
+    baseline: str = ""
+    #: 基线采集时的服务版本
+    service_version: str = ""
+    #: 基线采集时的输入与数据条件（窗口／快照／提前截止点）
+    conditions: dict[str, Any] | None = field(default=None)
+    #: 该基线是否已被人工审核采纳。未审核的基线不能冻结行为。
+    reviewed: bool = False
 
     @property
     def verified(self) -> bool:
@@ -54,6 +65,26 @@ class Basis:
         return (self.kind in VERIFIED_KINDS
                 and self.confirmed
                 and self.locatable is True)
+
+    @property
+    def regression_ready(self) -> bool:
+        """能否作为**行为回归**的基线。
+
+        四个条件缺一不可，少任何一条都只能算「看到过这个值」：
+
+        - ``baseline``      指向具体运行／证据包，能追溯
+        - ``service_version`` 采集时的版本，否则无法判断变化来自代码还是环境
+        - ``conditions``    输入与数据条件，否则换了窗口再比就是假比较
+        - ``reviewed``      人工审核采纳过 —— **本次响应不能给自己定基线**
+
+        最后一条是关键：用例不能拿「刚才调接口返回的值」当期望，
+        那样任何实现都能通过。基线必须来自跑之前就固定好的历史证据。
+        """
+        return (self.kind == "measured"
+                and bool(self.baseline)
+                and bool(self.service_version)
+                and self.conditions is not None
+                and self.reviewed)
 
     @property
     def declared_only(self) -> bool:
@@ -132,9 +163,34 @@ def _is_importable(path: str) -> bool:
     return True
 
 
-def measured(on: str) -> Basis:
-    """实测观察依据，只能用来说明「当时如此」，永远不计入已验证。"""
-    return Basis(kind="measured", ref=on)
+def measured(on: str, *, baseline: str = "", service_version: str = "",
+             conditions: dict[str, Any] | None = None,
+             reviewed: bool = False) -> Basis:
+    """实测观察依据，只能用来说明「当时如此」，**永远不计入需求验收**。
+
+    它可以充当**行为回归**的基线，但前提是四要素齐全（见 ``regression_ready``）：
+    出处、服务版本、输入与数据条件、以及人工审核采纳。缺任何一项就只是
+    「某个时刻看到过这个值」，不能用来冻结行为。
+
+    基线一旦采纳，**不随失败自动覆盖** —— 产品偏离基线时该报差异，
+    而不是悄悄把基线改成新值，否则回归测试永远绿。
+    """
+    return Basis(kind="measured", ref=on, baseline=baseline,
+                 service_version=service_version, conditions=conditions,
+                 reviewed=reviewed)
+
+
+def defect(ref: str, rev: str | None = None, *, confirmed: bool = False,
+           locatable: bool | None = None) -> Basis:
+    """已确认的缺陷修复约定 —— 如禅道 bug 单裁定的正确行为。
+
+    典型用法：bug 1810「非法 messageTypeId 写入失败对调用方不可见」，
+    其修复约定是「返回 4xx」。这不是需求条目，但同样是书面根据，
+    比「我实测它返回 200」强得多。
+    """
+    inferred = bool(ref and "#" in ref)
+    return Basis(kind="defect", ref=ref, rev=rev, confirmed=confirmed,
+                 locatable=locatable if locatable is not None else inferred)
 
 
 #: 什么都不写时的默认依据 —— 明确标记为「未经证实」

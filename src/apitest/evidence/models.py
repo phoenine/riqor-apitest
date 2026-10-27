@@ -25,9 +25,19 @@ class ExecutionStatus(str, Enum):
 
 
 class Verdict(str, Enum):
+    """**需求验收**结论。
+
+    与「行为回归」是两个维度，不要混：一条用例可以「验收依据不足」但
+    「与基线一致」。合并成一个枚举会让「没验过」和「产品错了」长得一样。
+    """
+
     PASS = "pass"
     FAIL = "fail"
+    #: 执行完成，但期望没有可判定的身份（依据不足）——**既不是通过也不是失败**。
+    #: 原来这种情况被归进 invalid，与「证据自相矛盾」同列，属于过度归因。
+    UNCONFIRMED = "unconfirmed"
     INCONCLUSIVE = "inconclusive"
+    #: 证据本身不可信：重放矛盾、清理失败、断言未完成。**只有这些**才叫结论不可信。
     INVALID = "invalid"
 
 
@@ -65,12 +75,26 @@ class BasisRecord(_Model):
     「这条断言跑得怎样」，不描述「期望从哪来」。
     """
 
-    kind: Literal["req", "schema", "ref", "measured", "observed"]
+    kind: Literal["req", "schema", "ref", "defect", "measured", "observed"]
     ref: str = ""
     rev: str | None = None
     inputs: dict[str, Any] | None = None
     confirmed: bool = False
     locatable: bool | None = None
+    #: 基线身份（measured 专用）：出处、服务版本、数据条件、是否审核采纳
+    baseline: str = ""
+    service_version: str = ""
+    conditions: dict[str, Any] | None = None
+    reviewed: bool = False
+
+    @property
+    def regression_ready(self) -> bool:
+        """能否作为行为回归的基线 —— 与 :class:`apitest.basis.Basis` 同规则。"""
+        return (self.kind == "measured"
+                and bool(self.baseline)
+                and bool(self.service_version)
+                and self.conditions is not None
+                and self.reviewed)
 
     @property
     def verified(self) -> bool:
@@ -78,14 +102,14 @@ class BasisRecord(_Model):
 
         只看 ``kind`` 是不够的 —— 声称了来源不等于来源支持这个期望。
         """
-        return (self.kind in {"req", "schema", "ref"}
+        return (self.kind in {"req", "schema", "ref", "defect"}
                 and self.confirmed
                 and self.locatable is True)
 
     @property
     def declared_only(self) -> bool:
         """声称了来源但未确认。"""
-        return self.kind in {"req", "schema", "ref"} and not self.confirmed
+        return self.kind in {"req", "schema", "ref", "defect"} and not self.confirmed
 
 
 class AssertionRecord(_Model):
@@ -165,15 +189,20 @@ class ExecutionRecord(_Model):
         1. 根本没执行（skipped/not_run/infrastructure_error）      → 无结论
         2. 执行失败（status=failed）                             → fail
            ★ 已知业务失败不能被任何前提覆盖
+           ★ 但期望没有有效来源时不能叫「违反需求」，归 unconfirmed
         3. 前提检查失败（holds=None）                             → invalid
         4. 前提不成立（holds=False）                              → inconclusive
         5. blocked（且前提无问题）                                → 无结论
-        6. 存在存活断言                                          → invalid
-        7. 没有断言（原生 assert 未记录）                          → invalid
-        8. 存在未完成断言（error/not_reached/skipped/failed）      → invalid
-        9. 存在未验证依据                                          → invalid
-        10. 其余                                                 → pass
+        6. 清理失败                                              → invalid
+        7. 重放自相矛盾                                           → invalid
+        8. 没有断言（原生 assert 未记录）                          → invalid
+        9. 存在未完成断言（error/not_reached/skipped）             → invalid
+        10. 断言通过但依据不足                                      → unconfirmed
+        11. 其余                                                 → pass
         ```
+
+        **第 10 步是关键修正**：「期望从哪来无法确认」和「证据本身坏了」是两件事，
+        原来都归 ``invalid``（结论不可信），把「还没补依据」说成了「结论有毒」。
 
         第 3、4 步的顺序尤其重要：一条用例既失败了、前提又不成立时，
         事实是「失败」，不是「无法验证」——后者会把缺陷洗掉。
@@ -190,6 +219,8 @@ class ExecutionRecord(_Model):
         }:
             return None
 
+        # 执行失败是**客观事实**，不能被依据强弱或证据瑕疵掩盖。
+        # 「失败该归咎于谁」是另一个问题，见 attribution()。
         if self.execution_status == ExecutionStatus.FAILED:
             return Verdict.FAIL
 
@@ -216,10 +247,37 @@ class ExecutionRecord(_Model):
             return Verdict.INVALID
         if any(a.result != "passed" for a in self.assertions):
             return Verdict.INVALID
+        # 断言都过了，但期望没有可采信来源 —— 这不是「证据不可信」，
+        # 是「还不足以下结论」。两者在报告里必须分开显示。
         if any(not a.verified for a in self.assertions):
-            return Verdict.INVALID
+            return Verdict.UNCONFIRMED
 
         return Verdict.PASS
+
+    def attribution(self) -> str | None:
+        """失败**归咎于谁** —— 只在 ``verdict == fail`` 时有意义。
+
+        ``verdict`` 回答「跑成没跑成」，这里回答「这个红说明了什么」：
+
+        - ``requirement``   期望有需求／规范／缺陷修复约定支撑 → 违反约定
+        - ``baseline_diff`` 期望来自已采纳的回归基线 → 偏离基线，
+                            是缺陷还是合理变更需人判断
+        - ``undetermined``  期望没有可判定的身份 → 只能说「与测试期望不同」，
+                            **不能据此宣称产品错误**
+
+        分开的理由：红灯本身只证明「和某个期望不一样」，能不能定产品错，
+        取决于那个期望有没有书面根据。
+        """
+        if self.verdict is not Verdict.FAIL:
+            return None
+        failed = [a for a in self.assertions if a.result != "passed"]
+        if not failed:
+            return "undetermined"
+        if all(a.basis.verified for a in failed):
+            return "requirement"
+        if all(a.basis.regression_ready for a in failed):
+            return "baseline_diff"
+        return "undetermined"
 
     def basis_coverage(self) -> dict[str, int]:
         """依据覆盖统计：verified 与 unverified 的断言条数。"""

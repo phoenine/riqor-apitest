@@ -41,7 +41,8 @@ def test_unlocatable_reference_is_not_verified():
     """引用解析不到具体条目 → 声称了也没用。"""
     assertion = _assertion(confirmed=True, locatable=False)
     assert assertion.verified is False
-    assert _record(assertions=[assertion]).verdict is Verdict.INVALID
+    # 引用定位不到 = 依据问题，不是证据问题
+    assert _record(assertions=[assertion]).verdict is Verdict.UNCONFIRMED
 
 
 def test_locatable_unknown_is_not_verified():
@@ -51,7 +52,8 @@ def test_locatable_unknown_is_not_verified():
     """
     assertion = _assertion(confirmed=True, locatable=None)
     assert assertion.verified is False
-    assert _record(assertions=[assertion]).verdict is Verdict.INVALID
+    # locatable=None 是「尚未核查」，属依据不足
+    assert _record(assertions=[assertion]).verdict is Verdict.UNCONFIRMED
 
 
 # ---------------------------------------------------------------- 断言执行结果
