@@ -134,7 +134,7 @@
       <tr><th class="col-tc">用例</th><th class="col-fail-reason">失败原因</th><th class="num col-dur">耗时</th></tr>
     </thead>
     <tbody>
-      {% for row in failure_groups %}
+      {% for row in failures %}
       <tr>
         <td class="col-tc">
           <span class="mono">{{ row.tc }}</span>
@@ -142,9 +142,6 @@
         </td>
         <td class="col-fail-reason">
           {{ row.reason }}
-          {% if row.cases|length > 1 %}
-          <div class="fail-group">同类：{% for it in row.cases %}<span class="mono">{{ it.tc }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</div>
-          {% endif %}
         </td>
         <td class="num col-dur mono">{{ "%.2f"|format(row.duration_s) }}s</td>
       </tr>

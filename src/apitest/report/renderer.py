@@ -191,25 +191,6 @@ def _failure_rows(document: EvidenceDocument) -> list[dict[str, Any]]:
     return rows
 
 
-def _failure_groups(document: EvidenceDocument) -> list[dict[str, Any]]:
-    """同上，但按失败原因合并成组 —— 同一根因打中多条用例时只占一行。"""
-    buckets: dict[str, list[dict[str, Any]]] = {}
-    for row in _failure_rows(document):
-        buckets.setdefault(row["reason"], []).append(row)
-
-    groups = []
-    for reason, items in buckets.items():
-        groups.append({
-            "reason": reason,
-            "tc": items[0]["tc"],
-            "intent": items[0]["intent"],
-            "duration_s": sum(i["duration_s"] for i in items),
-            "cases": items,
-        })
-    # 影响面大的排前面
-    return sorted(groups, key=lambda g: (-len(g["cases"]), -g["duration_s"]))
-
-
 def _duration_summary(document: EvidenceDocument, top_n: int = 5) -> dict[str, Any]:
     """耗时聚合：总量、最慢几条、按文件分布。
 
@@ -362,7 +343,6 @@ def build_context(document: EvidenceDocument, *,
         },
         "matrix": matrix,
         "failures": _failure_rows(document),
-        "failure_groups": _failure_groups(document),
         "duration": _duration_summary(document),
         "trend": _run_trend(evidence_dir),
         "unlinked": unlinked,
