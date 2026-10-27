@@ -21,16 +21,15 @@
   h3 { font-size: 14px; margin: 24px 0 8px; }
   .meta { color: var(--muted); font-size: 13px; }
   .meta code { background: var(--soft); padding: 1px 5px; border-radius: 4px; }
-  /* 执行上下文：固定 3 列网格，标签在上、值在下。
-     用 flex-wrap 时 5 项在 1080px 内放得下就不换行，看起来仍是一行 —— 这里要的是
-     排版上分开，不是溢出才换行。 */
-  .meta-bar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* 执行上下文：固定 2 列网格（四项正好 2×2），标签在上、值在下。
+     用 flex-wrap 时内容放得下就不换行，看起来仍是一行 —— 这里要的是排版上分开。 */
+  .meta-bar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
               gap: 12px 20px; margin: 4px 0 0; padding: 12px 16px;
               background: var(--soft); border-radius: 8px; }
   .meta-bar > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .meta-bar dt { color: var(--muted); font-size: 11px; }
   .meta-bar dd { margin: 0; font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
-  @media (max-width: 760px) { .meta-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 640px) { .meta-bar { grid-template-columns: 1fr; } }
 
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 16px 0; }
   .card { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
@@ -47,7 +46,7 @@
        white-space: nowrap; }
   /* 需求覆盖表：状态标记和用例编号被挤成两行就看不清了，给足最小宽度，
      让说明列去占剩余空间（它本来就能换行）。 */
-  .matrix th.col-tc, .matrix td.col-tc { min-width: 240px; }
+  .matrix th.col-tc, .matrix td.col-tc { min-width: 320px; }
   .matrix th.col-state, .matrix td.col-state,
   .matrix th.col-verdict, .matrix td.col-verdict { min-width: 108px; }
   .matrix th.col-auto, .matrix td.col-auto { min-width: 148px; }
@@ -107,9 +106,6 @@
     <div><dt>环境</dt><dd class="mono">{{ meta.environment }}</dd></div>
     <div><dt>地址</dt><dd class="mono">{{ meta.base_url }}</dd></div>
     <div><dt>执行</dt><dd class="mono">{{ meta.execution_id }}</dd></div>
-    {% if meta.exit_code is not none %}
-    <div><dt>退出码</dt><dd class="mono">{{ meta.exit_code }}</dd></div>
-    {% endif %}
   </dl>
 
   <!-- ============================================ 第一层：摘要 -->
