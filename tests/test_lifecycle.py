@@ -652,3 +652,135 @@ environments:
     for path_obj in attachments:
         assert "direct-secret" not in path_obj.read_text(encoding="utf-8"), \
             "未走插件时凭据泄漏"
+
+
+# ================================================================ 清理失败 × 业务失败
+def _bundle_with(tmp_path: Path, body: str):
+    root = _project(body)
+    evidence = tmp_path / "ev"
+    proc, doc = _run(root, evidence)
+    return root, evidence, proc, doc
+
+
+def test_cleanup_failure_does_not_break_bundle(tmp_path):
+    """JUnit 输出 error 而 JSON 记 passed 时，一致性校验曾把整包拦下来 ——
+    manifest 不生成，render 直接拒绝。生成与校验必须共用同一个映射。"""
+    root, evidence, _, doc = _bundle_with(tmp_path, """\
+import pytest
+from apitest import case, expect, req
+
+
+@pytest.fixture
+def broken():
+    yield 1
+    raise RuntimeError("清理炸了")
+
+
+@case(id="AUTO-030", tc="TC-30", intent="清理失败")
+def test_t(api, broken):
+    expect(1).equal_to(1, basis=req("REQ-1", confirmed=True))
+""")
+    assert (evidence / "manifest.json").is_file(), "证据包必须能生成"
+
+    from apitest.evidence.bundle import verify_bundle
+
+    assert verify_bundle(evidence) == [], "自己写出来的包必须自己校验得过"
+
+    proc = _cli(root, "render", "--evidence", str(evidence))
+    assert proc.returncode == 0, f"render 不能被自己的证据包挡住：{proc.stderr[:200]}"
+    assert (evidence / "report.html").is_file()
+
+
+def test_business_failure_survives_cleanup_failure(tmp_path):
+    """同时有断言失败和清理失败时，业务失败是主要事实。
+
+    只输出 error 会让 failures 归零，报告看起来像「环境问题」，
+    实际是产品不满足判据。
+    """
+    import xml.etree.ElementTree as ET
+
+    _, evidence, _, doc = _bundle_with(tmp_path, """\
+import pytest
+from apitest import case, expect, req
+
+
+@pytest.fixture
+def broken():
+    yield 1
+    raise RuntimeError("清理炸了")
+
+
+@case(id="AUTO-031", tc="TC-31", intent="两者都有")
+def test_t(api, broken):
+    expect(1).equal_to(999, basis=req("REQ-1", confirmed=True), intent="业务判据")
+""")
+    record = doc["executions"][0]
+    assert record["execution_status"] == "failed"
+    assert record["cleanup_error"]
+
+    root_el = ET.parse(evidence / "junit.xml").getroot()
+    assert root_el.get("failures") == "1", "业务失败必须计入 failures"
+    assert root_el.get("errors") == "0"
+
+    case_el = ET.parse(evidence / "junit.xml").find(".//testcase")
+    assert case_el[0].tag == "failure"
+    body = "".join(case_el[0].itertext())
+    assert "清理炸了" in body, "清理失败作为附加信息保留"
+
+
+def test_cleanup_only_failure_is_error(tmp_path):
+    """没有业务失败时，清理失败单独体现为 error。"""
+    import xml.etree.ElementTree as ET
+
+    _, evidence, _, doc = _bundle_with(tmp_path, """\
+import pytest
+from apitest import case, expect, req
+
+
+@pytest.fixture
+def broken():
+    yield 1
+    raise RuntimeError("清理炸了")
+
+
+@case(id="AUTO-032", tc="TC-32", intent="只有清理失败")
+def test_t(api, broken):
+    expect(1).equal_to(1, basis=req("REQ-1", confirmed=True))
+""")
+    assert doc["executions"][0]["verdict"] == "invalid"
+
+    root_el = ET.parse(evidence / "junit.xml").getroot()
+    assert root_el.get("errors") == "1"
+    assert root_el.get("failures") == "0"
+
+
+def test_mixed_cleanup_and_business_states_stay_consistent(tmp_path):
+    """一条业务失败、一条只有清理失败 —— 四种状态映射不能互相打架。"""
+    from apitest.evidence.bundle import _parse_junit_instances, junit_element
+    from apitest.evidence.models import EvidenceDocument
+
+    _, evidence, _, doc = _bundle_with(tmp_path, """\
+import pytest
+from apitest import case, expect, req
+
+
+@pytest.fixture
+def broken():
+    yield 1
+    raise RuntimeError("清理炸了")
+
+
+@case(id="AUTO-033", tc="TC-33", intent="业务失败")
+def test_a(api, broken):
+    expect(1).equal_to(999, basis=req("REQ-1", confirmed=True))
+
+
+@case(id="AUTO-034", tc="TC-34", intent="只有清理失败")
+def test_b(api, broken):
+    expect(1).equal_to(1, basis=req("REQ-1", confirmed=True))
+""")
+    document = EvidenceDocument.model_validate(doc)
+    parsed = _parse_junit_instances((evidence / "junit.xml").read_text(encoding="utf-8"))
+
+    for record in document.executions:
+        assert junit_element(record) == parsed[record.auto_id]

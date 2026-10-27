@@ -36,6 +36,46 @@ _JUNIT_ELEMENT: dict[str, str | None] = {
 }
 
 
+def junit_element(record: Any) -> str | None:
+    """JSON 记录 → JUnit 子元素。**生成与校验必须共用这一处。**
+
+    两条规则：
+
+    - **业务失败优先**。既有断言失败又有清理失败时，JUnit 输出 ``<failure>``，
+      清理错误附在正文里。反过来只留一条 ``<error>``，failures 统计归零，
+      业务失败的事实就没了 —— 报告看起来像「环境问题」，实际是产品不满足判据。
+    - ``passed`` + ``cleanup_error`` → ``<error>``。断言可能都对，但环境没
+      恢复干净，这次通过不可信；消费方按 error 处理。
+
+    曾经这里只按 execution_status 映射（cleanup_error 不进 JUnit），
+    后来改成 cleanup_error 无条件优先 —— 两次都让 JSON 与 JUnit 不一致，
+    一致性校验把整个证据包拦下来（manifest 不生成），包直接不可消费。
+    """
+    if record.execution_status is ExecutionStatus.FAILED:
+        return "failure"
+    if getattr(record, "cleanup_error", None):
+        return "error"
+    status = record.execution_status
+    if status is ExecutionStatus.BLOCKED:
+        return "skipped(blocked)"
+    if status is ExecutionStatus.SKIPPED:
+        return "skipped"
+    if status is ExecutionStatus.INFRASTRUCTURE_ERROR:
+        return "error"
+    return None
+
+
+def _element_status(element: str | None) -> str:
+    """JUnit 元素 → 用于报告的粗略状态（解析侧对称函数）。"""
+    if element is None:
+        return "passed"
+    if element == "failure":
+        return "failed"
+    if element == "error":
+        return "infrastructure_error"
+    return "blocked" if element == "skipped(blocked)" else "skipped"
+
+
 class EvidenceConsistencyError(RuntimeError):
     """四件套描述的不是同一批实例。"""
 
@@ -68,16 +108,8 @@ def build_junit(document: EvidenceDocument) -> str:
                if _JUNIT_ELEMENT.get(r.execution_status.value) != "ignore"
                and r.execution_status is not ExecutionStatus.NOT_RUN]
 
-    def _element(record: Any) -> str | None:
-        """JUnit 元素。清理失败优先 —— 只按 execution_status 映射的话，
-        passed + cleanup_error 会输出一条通过的 testcase，消费方（riqor）
-        归一化成 passed 后，与真实退出码对不上。"""
-        if record.cleanup_error:
-            return "error"
-        return _JUNIT_ELEMENT.get(record.execution_status.value)
-
-    failures = sum(1 for r in counted if _element(r) == "failure")
-    errors = sum(1 for r in counted if _element(r) == "error")
+    failures = sum(1 for r in counted if junit_element(r) == "failure")
+    errors = sum(1 for r in counted if junit_element(r) == "error")
     skipped = sum(1 for r in counted
                   if r.execution_status in (ExecutionStatus.SKIPPED,
                                             ExecutionStatus.BLOCKED))
@@ -93,7 +125,7 @@ def build_junit(document: EvidenceDocument) -> str:
         f'timestamp={quoteattr(document.meta.started_at or "")}>')
 
     for record in counted:
-        element = _element(record)
+        element = junit_element(record)
         lines.append(
             f'    <testcase classname={quoteattr(record.nodeid or record.auto_id)} '
             f'name={quoteattr(_testcase_name(record))} '
@@ -102,13 +134,17 @@ def build_junit(document: EvidenceDocument) -> str:
         if element == "failure":
             reason = record.assertions[0].failure_reason if record.assertions else ""
             message = reason or record.message or "断言失败"
+            body = record.message or message
+            if record.cleanup_error:
+                # 业务失败是主要事实，清理失败作为附加信息保留
+                body += f"\n\n[清理失败] {record.cleanup_error}"
             lines.append(f'      <failure message={quoteattr(message)}>'
-                         f'{escape(record.message or message)}</failure>')
+                         f'{escape(body)}</failure>')
         elif element == "error":
             detail = record.cleanup_error or record.message or "基础设施错误"
             lines.append(f'      <error message={quoteattr(detail)}/>')
-        elif element == "skipped":
-            prefix = "blocked" if record.execution_status is ExecutionStatus.BLOCKED else "skipped"
+        elif element and element.startswith("skipped"):
+            prefix = "blocked" if element == "skipped(blocked)" else "skipped"
             lines.append(
                 f'      <skipped message={quoteattr(f"{prefix}: {record.message}")}/>')
 
@@ -190,25 +226,25 @@ def _parse_junit_instances(xml_text: str) -> dict[str, str]:
     except ElementTree.ParseError as exc:
         raise EvidenceConsistencyError(f"junit.xml 无法解析：{exc}") from exc
 
-    found: dict[str, str] = {}
+    found: dict[str, str | None] = {}
     for testcase in root.iter("testcase"):
         name = testcase.get("name", "")
         if not name:
             continue
         if testcase.find("failure") is not None:
-            status = "failed"
+            element: str | None = "failure"
         elif testcase.find("error") is not None:
-            status = "infrastructure_error"
+            element = "error"
         else:
             skipped = testcase.find("skipped")
             if skipped is not None:
                 message = (skipped.get("message") or "").lower()
-                status = "blocked" if message.startswith("blocked") else "skipped"
+                element = "skipped(blocked)" if message.startswith("blocked") else "skipped"
             else:
-                status = "passed"
+                element = None
         if name in found:
             raise EvidenceConsistencyError(f"junit.xml 里 {name} 重复出现")
-        found[name] = status
+        found[name] = element
     return found
 
 
@@ -267,12 +303,19 @@ def check_consistency(document: EvidenceDocument,
             f"状态差异 {mismatch}；"
             f"仅 inventory 有 {sorted(inventory.keys() - expected.keys())}")
 
-    # 逐项状态：execution.json 与 JUnit 对同一实例必须给出同一状态
-    status_diff = {
-        key: (expected[key], junit_instances[key])
-        for key in expected.keys() & junit_instances.keys()
-        if expected[key] != junit_instances[key]
-    }
+    # 逐项状态：用**同一个** junit_element 映射算期望值。
+    # 生成和校验各写一套规则，就会出现「自己写出的 JUnit 自己校验不过」。
+    by_key = {_instance_key(r.auto_id, (r.param_instance or {}).get("id")): r
+              for r in document.executions}
+    status_diff = {}
+    for key in expected.keys() & junit_instances.keys():
+        record = by_key.get(key)
+        if record is None:
+            continue
+        want = junit_element(record)
+        got = junit_instances[key]
+        if want != got:
+            status_diff[key] = (want, got)
     if status_diff:
         problems.append(f"实例状态不一致（execution vs junit）：{status_diff}")
 
@@ -476,8 +519,8 @@ def verify_bundle(evidence_dir: Path) -> list[str]:
                 instance = ""
                 if record.param_instance:
                     instance = str(record.param_instance.get("id", ""))
-                expected[_instance_key(record.auto_id, instance)] = \
-                    record.execution_status.value
+                # 与其他两处用同一个映射，别在第四处再写一套
+                expected[_instance_key(record.auto_id, instance)] = junit_element(record)
             if expected != junit_instances:
                 problems.append(
                     "junit.xml 与 execution.json 的实例集合或状态不一致")

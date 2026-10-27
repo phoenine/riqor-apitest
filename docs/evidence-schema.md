@@ -222,17 +222,36 @@ CK 的金额是 `Decimal`、PG 的 `numeric`/`timestamp` 同理。不做这一�
 
 `manifest.json.files` 中每个文件的 sha256 与实际内容一致。
 
-### C4.2 JUnit 必须反映清理失败
+### C4.2 JUnit 映射只有一处定义
 
-`execution_status=passed` + `cleanup_error` 时，JUnit 要输出 `<error>`。
-只按状态映射的话会输出一条通过的 testcase，消费方（riqor）归一化成
-`passed`，随后与真实退出码对不上，整批结果被拒。
+状态映射写成三份独立的推断，会让「自己生成的 JUnit 自己校验不过」——
+一致性校验抛错，manifest 不生成，整包不可消费。所以只有 `junit_element()`
+一个函数，生成、校验、verify 三处共用。
 
-实测消费结果：
+| JSON（execution_status） | cleanup_error | JUnit 子元素 |
+|---|---|---|
+| `failed` | 有 / 无 | `<failure>`（清理错误附在正文） |
+| `passed` | 有 | `<error>` |
+| `passed` | 无 | 无 |
+| `infrastructure_error` | — | `<error>` |
+| `skipped` | — | `<skipped message="skipped: …">` |
+| `blocked` | — | `<skipped message="blocked: …">` |
+| `not_run` | — | 不写 |
+
+**业务失败优先**：同时有断言失败和清理失败时输出 `<failure>`，清理错误
+写进正文。反过来只留 `<error>` 会让 failures 归零 —— 报告看起来像环境问题，
+实际是产品不满足判据。
+
+实测（两条用例，一条两种失败兼有、一条只有清理失败）：
 
 ```text
-AUTO-001  passed
-AUTO-002  infrastructure_error   detail: teardown 阶段失败 — RuntimeError: ...
+<testsuites tests="2" failures="1" errors="1">
+  <testcase name="AUTO-001"><failure message="期望 999，实际 1">
+    ... [清理失败] teardown 阶段失败 — RuntimeError: 清理炸了</failure></testcase>
+  <testcase name="AUTO-002"><error message="teardown 阶段失败 — ..."/></testcase>
+
+riqor 归一化：AUTO-001 failed / AUTO-002 infrastructure_error
+一致性：execution_vs_junit=ok
 ```
 
 ### C4.5 必需文件齐全
