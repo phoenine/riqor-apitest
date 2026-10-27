@@ -32,9 +32,12 @@ from apitest.plan import (
 
 THEMES_DIR = Path(__file__).resolve().parent / "themes"
 
+#: 执行状态。刻意不用「通过 / 失败」—— 那是**验证结论**的措辞
+#: （VERDICT_LABELS 的「验证通过 / 验证失败」）。两个维度同页展示，
+#: 标签一旦撞词，读者会把「跑通了 103 条」当成「验过 103 条」。
 STATUS_LABELS = {
-    "passed": "通过",
-    "failed": "失败",
+    "passed": "执行成功",
+    "failed": "执行失败",
     "blocked": "阻塞",
     "skipped": "跳过",
     "not_run": "未运行",

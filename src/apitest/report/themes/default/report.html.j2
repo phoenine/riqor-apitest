@@ -165,7 +165,7 @@
   </table>
   {% if summary.has_no_verdict %}
   <div class="note">
-    有实例没有验证结论（跳过 / 未运行 / 基础设施错误）。这些<strong>不是通过</strong>，也不计入通过率。
+    有实例没有验证结论（跳过 / 未运行 / 基础设施错误）。这些<strong>不是通过</strong>，也不计入验证通过率。
   </div>
   {% endif %}
 
@@ -214,12 +214,12 @@
 
   {% if summary.pass_ratio is not none %}
   <p class="meta">
-    通过率 {{ summary.pass_ratio }}% — 分母是跑过的实例，分子只数结论为「通过」的。
+    验证通过率 {{ summary.pass_ratio }}% — 分母是跑过的实例，分子只数结论为「通过」的。
     无法验证（前提不成立）与依据不可信的实例算在分母里，但不算通过；
     跳过、未运行、基础设施错误不进分母。
   </p>
   {% else %}
-  <p class="meta">未执行任何实例，无通过率。</p>
+  <p class="meta">未执行任何实例，无验证通过率。</p>
   {% endif %}
 
   {% if duration.count %}
@@ -255,13 +255,13 @@
 
 
   {% if trend.available %}
-  <h3>跨运行通过率</h3>
+  <h3>跨运行验证通过率</h3>
   <p>
     最近 {{ trend.points|length }} 次完整运行。各次运行仍是独立证据，这里只并排比较，
     不做归并{% if trend.dropped %}；另有 {{ trend.dropped }} 次调试小批次未纳入{% endif %}。
   </p>
   <table class="trend">
-    <thead><tr><th>运行</th><th class="num">实例</th><th class="num">通过</th><th class="num col-dur">通过率</th></tr></thead>
+    <thead><tr><th>运行</th><th class="num">实例</th><th class="num">验证通过</th><th class="num col-dur">验证通过率</th></tr></thead>
     <tbody>
       {% for p in trend.points %}
       <tr>
