@@ -314,7 +314,7 @@ def test_report_renders_three_layers(tmp_path):
 
     assert "摘要" in html and "需求覆盖" in html and "证据详情" in html
     assert "TC-4" in html, "未实现的 TC 要出现在覆盖矩阵里"
-    assert "未实现" in html
+    assert "无对应用例" in html, "计划有但没写用例的 TC 要标成「无对应用例」"
     assert "跳过" in html, "执行状态必须在首页可见"
     assert "不计入已验证覆盖" in html or "依据" in html
 

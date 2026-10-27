@@ -12,6 +12,10 @@ build/
 .mypy_cache/
 .ruff_cache/
 
+# 业务用例：本地验收入库，不进公开仓库
+cases/
+cases/*/outputs/
+
 # 运行产物：证据包与报告不入库
 outputs/
 examples/*/outputs/

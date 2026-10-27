@@ -265,8 +265,10 @@ def test_changed_files_does_not_eat_leading_space():
         pytest.skip("不是 git 仓库")
     for name in names:
         assert not name.startswith(" "), f"{name!r} 残留前导空格"
-        assert name.endswith((".py", ".md", ".toml", ".j2", ".yaml", ".txt")), \
-            f"{name!r} 路径可疑（可能被切掉首字符）"
+        # 真正的判据是「名字指到实际存在的东西」——截掉首字符的路径不存在。
+        # 早先这里卡扩展名白名单，既验不出问题（--name-only 没有首列空格可 strip），
+        # 又会把 .gitignore 这类合法文件判成可疑。
+        assert (Path(".") / name).exists(), f"{name!r} 指不到实际文件（可能被切掉首字符）"
 
 
 # ---------------------------------------------------------------- 端到端

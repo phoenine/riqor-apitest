@@ -147,7 +147,7 @@ class CoverageState(str, Enum):
 
 
 STATE_LABELS = {
-    "not_implemented": "未实现",
+    "not_implemented": "无对应用例",
     "not_run": "未执行",
     "inconclusive": "无法验证",
     "partial": "部分验证",
@@ -220,7 +220,8 @@ def evaluate_case(case: PlannedCase,
             "executions": [],
             "uncovered": _uncovered(case, record_list),
             "waived": case.waived.model_dump() if case.waived else None,
-            "note": "计划里有，但没有任何用例声明该 TC",
+            "note": ("已豁免：" + case.waived.reason) if case.waived
+                    else "计划里有，但没有任何用例声明该 TC",
         }
 
     states = [r.execution_status for r in record_list]
